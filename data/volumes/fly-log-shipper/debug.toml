@@ -1,0 +1,10 @@
+[transforms.no_loopback]
+  type = "filter"
+  inputs = ["log_json"]
+  condition = { type = "vrl", source = '.fly.app.name != "${FLY_APP_NAME}"'}
+
+[sinks.console]
+  type = "console"
+  encoding.codec = "json"
+  encoding.json.pretty = true
+  inputs = ["no_loopback"]

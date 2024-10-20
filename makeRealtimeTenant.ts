@@ -1,0 +1,72 @@
+#!/bin/env -S npx tsx
+
+import {sign} from 'jsonwebtoken';
+import { execSync } from 'child_process';
+import "dotenv/config";
+
+const url = 'http://localhost:4000/api/tenants';
+const claims = {
+  iss: '',
+  iat: Math.floor(Date.now() / 1000),
+  exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24), // 24 hours expiration
+  aud: '',
+  sub: ''
+};
+const token = sign(claims, process.env.JWT_SECRET);
+
+function deleteTenant(data: any) {
+  return `curl -sX DELETE ${url}/${data.tenant.name} -H "Authorization: Bearer ${token}" && echo "Tenant ${data.tenant.name} deleted"`;
+}
+
+function createTenant(data: any) {
+  return `curl -sX POST ${url} -H "Content-Type: application/json" -H "Authorization: Bearer ${token}" -d '${JSON.stringify(data)}' >/dev/null && echo "Tenant ${data.tenant.name} created"`;
+}
+
+function singleQuote(str: string) {
+  return `'${str.replace(/'/g, "'\\''")}'`;
+}
+
+function runFly(cmd: string) {
+  execSync(`fly ssh console -C ${singleQuote(`/bin/sh -c ${singleQuote(cmd)}`)}`, {stdio: 'inherit'});
+}
+
+async function main() {
+  const tenantName = process.argv[2];
+  if (!tenantName) {
+    throw new Error('Usage: realtime_tenant.ts <tenant-name>');
+  }
+  const prefix = tenantName.split('-')[0];
+
+  const data = {
+    tenant: {
+      name: tenantName,
+      external_id: tenantName,
+      jwt_secret: process.env.JWT_SECRET,
+      extensions: [
+        {
+          type: 'postgres_cdc_rls',
+          settings: {
+            db_name: process.env.POSTGRES_DB,
+            db_host: `${prefix}-db.internal`,
+            db_user: 'supabase_admin',
+            db_password: process.env.POSTGRES_PASSWORD,
+            db_port: process.env.POSTGRES_PORT,
+            region: 'us-west-1',
+            ssl_enforced: false,
+            poll_interval_ms: 100,
+            poll_max_record_bytes: 1048576
+          }
+        }
+      ]
+    }
+  };
+
+  runFly(`${deleteTenant({tenant: {name: 'realtime-dev'}})}; ${deleteTenant(data)}; ${createTenant(data)}`);
+}
+
+main()
+    .then(() => process.exit(0))
+    .catch((error) => {
+        console.error(`Failed.\n${error.stack}`);
+        process.exit(1);
+    });
