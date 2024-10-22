@@ -350,7 +350,7 @@ function makeFly(context: {
 
     const env = {
         ...Object.fromEntries(
-            Object.entries({
+            Object.entries<string>({
                 ...composeData.environment,
                 ...metadata?.env,
             })
@@ -380,7 +380,10 @@ function makeFly(context: {
     const services = (composeData.ports ?? []).concat(metadata?.extraPorts ?? []).map((portMapping: string) => {
         let [hostPort, containerPort, protocol] = portMapping.match(
             /([^:]+):([^\/]+)(?:\/(.*))?/
-        ).slice(1);
+        )?.slice(1) ?? [undefined, undefined, undefined];
+        if (hostPort === undefined || containerPort === undefined) {
+            throw new Error(`Invalid port mapping: ${portMapping}`);
+        }
         if (metadata?.suppressPorts?.includes(hostPort)) {
             console.warn(`Suppressing port ${hostPort} for ${name}`);
             return;
@@ -678,7 +681,7 @@ function makeFlyLogShipperConfig() {
     transforms.project_logs.inputs = [ "log_json" ];
     transforms.project_logs.source = transforms.project_logs.source.replace('.container_name', '.fly.app.name');
     transforms.router.route = Object.fromEntries(
-        Object.entries(transforms.router.route)
+        Object.entries<string>(transforms.router.route)
         .map(([key, value] : [string, string]) =>
             [key, value.replace('supabase', '${SUPABASE_PREFIX}')])
     );
