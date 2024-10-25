@@ -11,6 +11,7 @@ import { replaceInFileSync } from "replace-in-file";
 import dedent from "ts-dedent";
 import { solve as solveDependencies } from "dependency-solver";
 import { sign, verify } from "jsonwebtoken";
+import { deepmerge } from "deepmerge-ts";
 
 const baseRepo = "https://github.com/supabase/supabase.git";
 const baseBranch = "da4e05d8fa54c0dade2925f33c62b7f3ce4f36d6";
@@ -55,8 +56,41 @@ type Metadata = {
     [key: string]: ServiceMetadata;
 };
 
-function makeMetadata(prefix: string): Metadata {
-    return {
+function makeMetadata(prefix: string, composeData: any): Metadata {
+    // Replace unqualified hostnames in environment variables with
+    // internal prefixed hostnames
+
+    function adjustInternalUrls(environment: { [key: string]: string }): { [key: string]: string } {
+        return Object.fromEntries(
+            Object.entries<string>(environment)
+            .map(([key, value]) => {
+                try {
+                    const url = new URL(value);
+                    const origName = url.hostname;
+                    url.hostname = origName.replace(/^([^.]+)$/, `${prefix}-$1.internal`);
+                    if (url.hostname === origName)
+                        return [];
+                    return [key, url.toString()];
+                } catch (error) {
+                    return [];
+                }
+            })
+            .filter((entry) => entry.length > 0)
+        );
+    }
+
+    function processService(serviceMeta: any) {
+        const adjustedUrlEnv = adjustInternalUrls(serviceMeta.environment ?? {});
+        if (Object.keys(adjustedUrlEnv).length == 0) return {}
+        return { env: adjustedUrlEnv };
+    }
+
+    const mappedMetadata = Object.fromEntries(Object.entries<any>(composeData.services)
+        .map(([service, serviceCompose]) => [service, processService(serviceCompose)])
+        .filter(([_, serviceMeta]) => Object.keys(serviceMeta).length)
+    );
+
+    return deepmerge(mappedMetadata, {
         db: {
             ha: false,
             rawPorts: [ "${POSTGRES_PORT}" ],
@@ -102,9 +136,6 @@ function makeMetadata(prefix: string): Metadata {
             ha: true,
             env: {
                 HOSTNAME: 'fly-local-6pn',
-                STUDIO_PG_META_URL: `http://${prefix}-meta.internal:8080`,
-                SUPABASE_URL: `https://${prefix}-kong.fly.dev`,
-                LOGFLARE_URL: `http://${prefix}-analytics.internal:4000`,
                 NEXT_PUBLIC_SITE_URL: `https://${prefix}-kong.fly.dev`,
                 NEXT_PUBLIC_GOTRUE_URL: `https://${prefix}-kong.fly.dev/auth/v1`
             },
@@ -159,8 +190,6 @@ function makeMetadata(prefix: string): Metadata {
                 STORAGE_S3_FORCE_PATH_STYLE: true,
                 // STORAGE_S3_REGION: 'us-east-1',
                 FILE_STORAGE_BACKEND_PATH: undefined,
-                IMGPROXY_URL: `http://${prefix}-imgproxy.internal:5001`,
-                POSTGREST_URL: `http://${prefix}-rest.internal:3000`,
             },
             secrets: {
                 ANON_KEY: true,
@@ -211,9 +240,6 @@ function makeMetadata(prefix: string): Metadata {
         },
         functions: {
             ha: true,
-            env: {
-                SUPABASE_URL: `http://${prefix}-kong.internal:8000`,
-            },
             secrets: {
                 JWT_SECRET: true,
                 SUPABASE_ANON_KEY: true,
@@ -265,7 +291,7 @@ function makeMetadata(prefix: string): Metadata {
                 makeFlyLogShipperConfig
             ]
         }
-    }
+    }) as Metadata;
 }
 
 const substitutedServices = { vector: "fly-log-shipper" };
@@ -826,7 +852,7 @@ async function main() {
     const prefix = process.env.FLY_PREFIX || composeData.name || 'supabase';
 
     setupEnvironment(prefix);
-    const metadata = makeMetadata(prefix);
+    const metadata = makeMetadata(prefix, composeData);
 
     Object.assign(composeData.services, extraServices);
 

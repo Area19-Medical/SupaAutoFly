@@ -16,6 +16,8 @@
     "yaml": "^2.6.0"
   },
   "devDependencies": {
-    "@types/node": "^22.7.7"
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.7.7",
+    "deepmerge-ts": "^7.1.3"
   }
 }
