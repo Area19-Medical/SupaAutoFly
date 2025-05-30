@@ -11,10 +11,10 @@ import { replaceInFileSync } from "replace-in-file";
 import dedent from "ts-dedent";
 import { solve as solveDependencies } from "dependency-solver";
 import { sign, verify } from "jsonwebtoken";
-import { deepmerge } from "deepmerge-ts";
+import { expandEnvVars } from "./expandEnvVars";
 
 const baseRepo = "https://github.com/supabase/supabase.git";
-const baseBranch = "da4e05d8fa54c0dade2925f33c62b7f3ce4f36d6";
+const baseBranch = "1.25.04";
 
 const org = process.env.FLY_ORG || "personal";
 
@@ -56,68 +56,21 @@ type Metadata = {
     [key: string]: ServiceMetadata;
 };
 
-function makeMetadata(prefix: string, composeData: any): Metadata {
-    // Replace unqualified hostnames in environment variables with
-    // internal prefixed hostnames
-
-    function adjustInternalUrls(environment: { [key: string]: string }): { [key: string]: string } {
-        return Object.fromEntries(
-            Object.entries<string>(environment)
-            .map(([key, value]) => {
-                try {
-                    const url = new URL(value);
-                    const origName = url.hostname;
-                    url.hostname = origName.replace(/^([^.]+)$/, `${prefix}-$1.internal`);
-                    if (url.hostname === origName)
-                        return [];
-                    return [key, url.toString()];
-                } catch (error) {
-                    return [];
-                }
-            })
-            .filter((entry) => entry.length > 0)
-        );
-    }
-
-    function processService(serviceMeta: any) {
-        const adjustedUrlEnv = adjustInternalUrls(serviceMeta.environment ?? {});
-        if (Object.keys(adjustedUrlEnv).length == 0) return {}
-        return { env: adjustedUrlEnv };
-    }
-
-    const mappedMetadata = Object.fromEntries(Object.entries<any>(composeData.services)
-        .map(([service, serviceCompose]) => [service, processService(serviceCompose)])
-        .filter(([_, serviceMeta]) => Object.keys(serviceMeta).length)
-    );
-
-    return deepmerge(mappedMetadata, {
+function makeMetadata(prefix: string): Metadata {
+    return {
         db: {
             ha: false,
+            extraPorts: [ "${POSTGRES_PORT}:${POSTGRES_PORT}" ],
             rawPorts: [ "${POSTGRES_PORT}" ],
-            secrets: {
-                PGPASSWORD: true,
-                POSTGRES_PASSWORD: true,
-                JWT_SECRET: true,
-            }
         },
         auth: {
             ha: true,
-            secrets: {
-                GOTRUE_DB_DATABASE_URL: true,
-                GOTRUE_JWT_SECRET: true,
-                GOTRUE_SMTP_PASS: true,
-            }
         },
         kong: {
             ha: true,
             suppressPorts : [ "${KONG_HTTPS_PORT}" ],
             env : {
                 KONG_DNS_ORDER: "LAST,AAAA,A,CNAME",
-            },
-            secrets: {
-                SUPABASE_ANON_KEY: true,
-                SUPABASE_SERVICE_KEY: true,
-                DASHBOARD_PASSWORD: true,
             },
             postprocess: [
                 postprocessKongYml,
@@ -128,28 +81,18 @@ function makeMetadata(prefix: string, composeData: any): Metadata {
             env: {
                 PG_META_HOST: "fly-local-6pn"
             },
-            secrets: {
-                PG_META_DB_PASSWORD: true,
-            }
         },
         studio: {
             ha: true,
             env: {
                 HOSTNAME: 'fly-local-6pn',
+                SUPABASE_URL: `https://${prefix}-kong.fly.dev`,
                 NEXT_PUBLIC_SITE_URL: `https://${prefix}-kong.fly.dev`,
                 NEXT_PUBLIC_GOTRUE_URL: `https://${prefix}-kong.fly.dev/auth/v1`
             },
-            secrets: {
-                POSTGRES_PASSWORD: true,
-                AUTH_JWT_SECRET: true,
-                SUPABASE_ANON_KEY: true,
-                SUPABASE_SERVICE_KEY: true,
-                LOGFLARE_API_KEY: true,
-            }
         },
         analytics: {
-            ha: false,
-            image: "registry.fly.io/supabase-analytics:1.8.11-tv-1",
+            ha: true,
             buildFromRepo: {
                 repo: "https://github.com/tvogel/logflare.git",
                 branch: "v1.8.11-tv-1",
@@ -162,7 +105,6 @@ function makeMetadata(prefix: string, composeData: any): Metadata {
                 PHX_URL_HOST: `${prefix}-analytics.fly.dev`
             },
             secrets: {
-                DB_PASSWORD: true,
                 POSTGRES_BACKEND_URL: true,
                 LOGFLARE_PUBLIC_ACCESS_TOKEN: '${LOGFLARE_API_KEY}',
             }
@@ -174,8 +116,6 @@ function makeMetadata(prefix: string, composeData: any): Metadata {
                 PGRST_LOG_LEVEL: "${PGRST_LOG_LEVEL}",
             },
             secrets: {
-                PGRST_JWT_SECRET: true,
-                PGRST_APP_SETTINGS_JWT_SECRET: true,
                 PGRST_DB_URI: true,
             },
         },
@@ -192,10 +132,6 @@ function makeMetadata(prefix: string, composeData: any): Metadata {
                 FILE_STORAGE_BACKEND_PATH: undefined,
             },
             secrets: {
-                ANON_KEY: true,
-                SERVICE_KEY: true,
-                PGRST_JWT_SECRET: true,
-                DATABASE_URL: true,
                 AWS_ACCESS_KEY_ID: '${STORAGE_AWS_ACCESS_KEY_ID}',
                 AWS_SECRET_ACCESS_KEY: '${STORAGE_AWS_SECRET_ACCESS_KEY}',
             },
@@ -217,46 +153,37 @@ function makeMetadata(prefix: string, composeData: any): Metadata {
             skipVolumes: [ './volumes/storage' ],
         },
         realtime: {
-            ha: true,
-            image: "registry.fly.io/supabase-realtime:2.28.32-tv-1",
+            ha: false,
             buildFromRepo: {
                 repo: "https://github.com/tvogel/realtime.git",
-                branch: "v2.28.32-tv-1",
+                branch: "v2.30.34-tv-1",
             },
             env: {
                 ERL_AFLAGS: "-proto_dist inet6_tcp",
                 SEED_SELF_HOST: 0,
             },
             // extraVolumes: [ "./volumes/realtime/runtime.exs:/app/releases/2.28.32/runtime.exs" ],
-            secrets: {
-                DB_PASSWORD: true,
-                DB_ENC_KEY: true,
-                API_JWT_SECRET: true,
-                SECRET_KEY_BASE: true,
-            },
             extraDeployment: [
                 makeRealtimeTenantSetup
             ]
         },
         functions: {
             ha: true,
+            env: {
+                SUPABASE_URL: `https://${prefix}-kong.fly.dev`,
+            },
             secrets: {
-                JWT_SECRET: true,
-                SUPABASE_ANON_KEY: true,
-                SUPABASE_SERVICE_ROLE_KEY: true,
                 SUPABASE_DB_URL: true,
             },
             extraPorts: [ "9000:9000" ],
             rawPorts: [ "9000" ],
-            ip: "flycast"
+            ip: "flycast",
+            extraDeployment: [
+                installDeployFunctions
+            ]
         },
         minio: {
             ha: false,
-            secrets: {
-                MINIO_ROOT_PASSWORD: true,
-                STORAGE_AWS_ACCESS_KEY_ID: true,
-                STORAGE_AWS_SECRET_ACCESS_KEY: true,
-            },
             extraContainerSetup: dedent`
                 function setup_credentials() {
                     while ! mc alias set local http://localhost:9000 \\\${MINIO_ROOT_USER} \\\${MINIO_ROOT_PASSWORD} &>/dev/null; do
@@ -290,8 +217,13 @@ function makeMetadata(prefix: string, composeData: any): Metadata {
             preprocess: [
                 makeFlyLogShipperConfig
             ]
-        }
-    }) as Metadata;
+        },
+        supavisor: {
+            ha: false,
+            rawPorts: [ "${POSTGRES_PORT}", "${POOLER_PROXY_PORT_TRANSACTION}" ],
+        },
+
+    };
 }
 
 const substitutedServices = { vector: "fly-log-shipper" };
@@ -326,16 +258,6 @@ const extraServices = {
     }
 }
 
-function expandEnvVars(value: unknown): string {
-    const valueString = String(value);
-    return valueString.replace(/(^|[^$])\${(.*?)}/g, (_, pre, key) => {
-        if (!(key in process.env)) {
-            throw new Error(`Environment variable ${key} is not defined`);
-        }
-        return pre + (process.env[key] || "");
-    }).replaceAll('$$', '$');
-}
-
 function getDockerUserEntrypointAndCmd(image: string) {
     execSync(`docker pull ${image}`, { stdio: 'inherit' });
     const dockerInspect = JSON.parse(
@@ -361,6 +283,10 @@ function doubleQuote(args: string[]): string {
     + '"';
 }
 
+function toVolumeName(volume: string): string {
+    return volume.replace(/[^a-z0-9_]/gi, '_');
+}
+
 function makeFly(context: {
     prefix: string;
     name: string;
@@ -374,19 +300,44 @@ function makeFly(context: {
         preprocess(context);
     });
 
+    function mapUnqualifiedUrl(value: string): string {
+        try {
+            const url = new URL(value);
+            const origName = url.hostname;
+            if (url.hostname !== 'localhost') { // allow dev-redirects to localhost
+                url.hostname = origName.replace(/^([^.]+)$/, `${prefix}-$1.internal`);
+            }
+            if (url.hostname === origName)
+                return value;
+            const newUrl = url.toString();
+            if (!value.endsWith('/') && newUrl.endsWith('/'))
+                return newUrl.slice(0, -1);
+            return newUrl;
+        } catch (error) {
+            // Not a URL
+        }
+        return value;
+    }
+
+    function guessSecret(key: string): boolean {
+        return !!key.match(/(pass|secret|key|database_url)/i);
+    }
+
+    const guessedSecrets = Object.keys(composeData.environment).filter((key: string) => guessSecret(key));
+
     const env = {
         ...Object.fromEntries(
             Object.entries<string>({
                 ...composeData.environment,
                 ...metadata?.env,
             })
-            .filter(([key, _]: [string, string]) => metadata?.secrets?.[key] === undefined)
             .filter(([_, value]: [string, string]) => value !== undefined)
+            .filter(([key, _]: [string, string]) =>
+                !guessedSecrets.includes(key) && metadata?.secrets?.[key] === undefined)
             .map(
                 ([variable, value]: [string, string]) => {
-                    return [variable, expandEnvVars(value)];
-                },
-            ),
+                    return [variable, mapUnqualifiedUrl(expandEnvVars(value))];
+            })
         ),
     };
     let entrypoint = composeData.entrypoint;
@@ -487,9 +438,8 @@ function makeFly(context: {
             console.warn(`Sharing of volumes between apps is currently not supported. Creating separate volumes for ${volume.hostPath}.`);
         }
 
-        const volumeName = `${prefix}_${volume.hostPath
-        .replace(/^.\/volumes\//, '')
-        .replace(/[^a-z0-9]/gi, '_')}`;
+        const volumeName = toVolumeName(
+            `${prefix}_${volume.hostPath.replace(/^.\/volumes\//, '')}`);
 
         if (fs.statSync(dockerDir + volume.hostPath, { throwIfNoEntry: false })?.isDirectory()) {
             const targetPath = `${dir}/${volume.hostPath}`;
@@ -512,7 +462,10 @@ function makeFly(context: {
         }
     });
 
-    if (metadata?.buildFromRepo && metadata?.image) {
+    if (metadata?.buildFromRepo) {
+        if (metadata.image)
+            throw new Error('Cannot specify both image and buildFromRepo');
+        metadata.image = `registry.fly.io/${prefix}-${name}:${metadata.buildFromRepo.branch}`;
         if (execSync(`docker images -q ${metadata.image}`, { encoding: 'utf-8' }) !== '') {
             console.log(`Image ${metadata.image} already exists. Skipping build.`);
         } else {
@@ -545,8 +498,11 @@ function makeFly(context: {
         postprocess(context);
     });
 
-    const secrets = metadata?.secrets;
-    if (secrets) {
+    const secrets = {
+        ...Object.fromEntries(guessedSecrets.map((key: string) => [key, true])),
+        ...metadata?.secrets
+    };
+    if (Object.keys(secrets).length > 0) {
         console.log(`Making secrets.sh for ${name}`);
         const secretsSh = fs.openSync(`${dir}/secrets.sh`, 'w');
         fs.writeSync(secretsSh, '#!/bin/sh\n');
@@ -555,7 +511,7 @@ function makeFly(context: {
             let secretValue = secrets[secretName];
             if (secretValue === true)
                 secretValue = composeData.environment[secretName];
-            const secretValueExpanded = expandEnvVars(secretValue);
+            const secretValueExpanded = mapUnqualifiedUrl(expandEnvVars(secretValue));
             expandedSecrets.push(`${secretName}=${secretValueExpanded}`);
         }
         fs.writeSync(secretsSh, `fly secrets import --stage -a ${prefix}-${name} <<EOF\n`);
@@ -652,7 +608,8 @@ function generateDockerfile(image: string, entrypoint: string[], composeData: an
             if [ -e ${mount.destination} ]; then
                 rm -rf ${mount.destination}
             fi
-            ln -s /fly-data/${mount.source} ${mount.destination}\n
+            mkdir -p ${mount.destination}
+            mount --bind /fly-data/${mount.source} ${mount.destination}\n
             `);
     });
 
@@ -679,7 +636,7 @@ function generateDockerfile(image: string, entrypoint: string[], composeData: an
     fs.closeSync(fd);
     mounts = [{
         destination: "/fly-data",
-        source: `${prefix}_${name}_data`,
+        source: toVolumeName(`${prefix}_${name}_data`),
     }];
     const newEntrypoint = entrypoint
     ? [
@@ -751,6 +708,12 @@ function makeRealtimeTenantSetup(context: {prefix: string, name: string, dir: st
         `;
 }
 
+function installDeployFunctions(context: {prefix: string, name: string, dir: string}) {
+    const { prefix, name, dir } = context;
+    fs.copyFileSync('./deployFunctions.ts', `${dir}/deployFunctions.ts`);
+    return '';
+}
+
 function makeDependencyGraph(composeData: any, metadata: Metadata): { [key: string]: string[] } {
     const graph: { [key: string]: string[] } = {};
 
@@ -786,9 +749,12 @@ function clone() {
 }
 
 function checkJwt() {
+    if (!process.env.JWT_SECRET) {
+        throw new Error('JWT_SECRET is required');
+    }
     try {
-        verify(process.env.ANON_KEY, process.env.JWT_SECRET);
-        verify(process.env.SERVICE_ROLE_KEY, process.env.JWT_SECRET);
+        verify(process.env.ANON_KEY ?? '', process.env.JWT_SECRET);
+        verify(process.env.SERVICE_ROLE_KEY ?? '', process.env.JWT_SECRET);
     } catch (error) {
         console.log('JWT_SECRET does not match ANON_KEY or SERVICE_ROLE_KEY: regenerating keys.');
         const now = Math.floor(Date.now() / 1000);
@@ -839,6 +805,18 @@ function setup() {
     checkLogShipperAccessKey();
 }
 
+function fixupComposeData(composeData: any) {
+    for (const serviceName in composeData.services) {
+        const service = composeData.services[serviceName];
+        if (Array.isArray(service.environment)) {
+            service.environment = Object.fromEntries(service.environment.map((entry: string) => {
+                const [key, value] = entry.split('=');
+                return [key, value];
+            }));
+        }
+    }
+}
+
 async function main() {
     setup();
 
@@ -849,12 +827,17 @@ async function main() {
 
     const composeYaml = fs.readFileSync("./supabase/docker/docker-compose.yml", "utf8");
     const composeData = parse(composeYaml);
-    const prefix = process.env.FLY_PREFIX || composeData.name || 'supabase';
+    fixupComposeData(composeData);
+
+    const prefix = process.env.FLY_PREFIX || String(composeData.name) || 'supabase';
+    if (prefix.match(/[^a-z0-9-]/)) {
+        throw new Error('Invalid prefix. Only lowercase letters, numbers, and hyphens are allowed.');
+    }
 
     setupEnvironment(prefix);
-    const metadata = makeMetadata(prefix, composeData);
-
     Object.assign(composeData.services, extraServices);
+
+    const metadata = makeMetadata(prefix);
 
     const flyDir = "./fly";
 
@@ -928,6 +911,8 @@ async function main() {
     });
     fs.closeSync(destroyAllSh);
     fs.chmodSync(`${flyDir}/destroy-all.sh`, 0o755);
+
+    fs.copyFileSync('./.env', `${flyDir}/.env`);
 }
 
 main()

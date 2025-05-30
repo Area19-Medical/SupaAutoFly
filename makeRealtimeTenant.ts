@@ -35,7 +35,7 @@ async function main() {
   if (!tenantName) {
     throw new Error('Usage: realtime_tenant.ts <tenant-name>');
   }
-  const prefix = tenantName.split('-')[0];
+  const prefix = tenantName.slice(0, tenantName.indexOf('-realtime'));
 
   const data = {
     tenant: {

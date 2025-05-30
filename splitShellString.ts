@@ -62,7 +62,7 @@ export function splitShellString(str: string): string[] {
       const [ value, next ] = processQuotedString(str, i + 1, '"');
       accum += value;
       i = next - 1;
-      continue;splitQuotedArgs
+      continue;
     }
     if (c === "'") {
       const [ value, next ] = processQuotedString(str, i + 1, "'");
