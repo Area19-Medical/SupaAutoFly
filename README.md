@@ -94,6 +94,19 @@ The following environment variables are required:
 - `GOOGLE_PROJECT_NUMBER`: The project number for Google BigQuery.
 - `FLY_LOG_SHIPPER_ACCESS_KEY`: The access key for Fly Log Shipper (automatically created if not provided).
 
+## Deploying Edge Functions
+
+To deploy edge functions to the deployed edge function server:
+
+1. Make sure, the edge function server is deployed, e.g. by running the `deploy-all.sh` script.
+2. Navigate to the generated app directory for the edge function server, typically `fly/functions`.
+3. To deploy functions from `~/project/supabase/functions`, run:
+```sh
+npx tsx deployFunctions.ts ~/project/supabase/functions
+```
+
+The script will connect to the Fly.io app for the edge functions, upload the function definitions to the app's volume and set up the necessary secrets from the `.env` file in the specified directory.
+
 ## Customization
 
 You can customize the deployment by modifying the `makeMetadata` function and the `extraServices` object in the `makeFly.ts` script.
@@ -104,6 +117,7 @@ Because, this is focussed on deploying Supabase, the script is not designed to b
 
 - The script currently does not convert health checks from the `docker-compose.yml` file.
 - The dependency resolution is simplistic.
+- Edge functions currently do not support the [`config.toml`](https://supabase.com/docs/guides/functions/development-tips#using-configtoml) file. There is just a global `VERIFY_JWT` variable for all functions.
 
 ## License
 
