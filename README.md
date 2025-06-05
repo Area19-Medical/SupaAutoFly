@@ -81,11 +81,23 @@ You can also point the script to a different functions directory (e.g. `volumes/
 npx tsx deployFunctions.ts <my-functions-dir>
 ```
 
+## Changing the Postgres password
+If you need to change the Postgres password after the initial deployment, you can do so by running the following command:
+
+```sh
+cd fly
+./passwdDb.ts
+```
+
+This will query for a new password (minimum 16 characters, cannot contain `/`) twice, install it in the `db` container and save it to the `.env` file.
+
+_Important:_ You will need to copy the new `.env` file to the SupaAutoFly root directory and run `./makeFly.ts` and `./fly/deploy-all.sh` again to update all dependent services with the new password as well!
+
 ## Customization
 
 You can customize the deployment by modifying the `makeMetadata` function and the `extraServices` object in the `makeFly.ts` script.
 
-Because, this is focussed on deploying Supabase, the script is not designed to be a generic docker-compose to Fly.io converted. Docker-compose is way too rich to make this feasible.
+Because this is focussed on deploying Supabase, the script is not designed to be a generic docker-compose to Fly.io converted. Docker-compose is way too rich to make this feasible.
 
 ## Limitations
 

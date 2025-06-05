@@ -1179,6 +1179,7 @@ async function main() {
   fs.chmodSync(`${flyDir}/destroy-all.sh`, 0o755);
 
   fs.copyFileSync("./.env", `${flyDir}/.env`);
+  fs.copyFileSync("./passwdDb.ts", `${flyDir}/passwdDb.ts`);
 }
 
 main()
