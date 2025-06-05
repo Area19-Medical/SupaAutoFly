@@ -15,13 +15,9 @@ async function main() {
       validate: (val: string) =>
         val.length < 16
           ? "Password must be at least 16 characters long"
-          : !val.includes("/") || "Password cannot contain '/' character",
+          : !!val.match(/^\w*$/) || "Please use only [a-zA-Z0-9_] characters",
     },
   ]);
-  if (password.includes("/")) {
-    console.error("Password cannot contain '/' character. Aborting.");
-    process.exit(1);
-  }
   const { password2 } = await prompt<{ password2: string }>([
     {
       type: "password",
@@ -87,4 +83,8 @@ async function main() {
   );
 }
 
-main();
+main().catch((err) => {
+  const errMsg = "message" in err ? String(err.message) : String(err);
+  console.error(`Aborted${errMsg ? ` (${errMsg})` : ''}.`);
+  process.exit(1);
+});
