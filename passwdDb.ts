@@ -83,7 +83,7 @@ async function main() {
 
   console.log("Password updated and saved to .env.");
   console.log(
-    "To adjust all dependent services, copy the .env file to the root of SupaAutoFly and run makeFly.ts and fly/deploy-all.ts again."
+    "To adjust all dependent services, copy the .env file to the root of SupaAutoFly and run makeFly.ts and fly/deploy-all.sh again."
   );
 }
 
