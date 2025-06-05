@@ -30,6 +30,13 @@ cp .env.example .env
 yarn
 ```
 
+## Configuration
+
+The supabase deployment is configured by environment variables in a `.env` file.
+Please see the [`.env.example`](.env.example) file for reference.
+
+_Make sure to set up secure secrets._
+
 ## Usage
 
 1. Run the script:
@@ -53,59 +60,26 @@ or `npx tsx makeFly.ts` if your shell cannot process shebangs.
 ./fly/destroy-all.sh
 ```
 
-## Environment Variables
-
-The following environment variables are required:
-
-- `FLY_ORG`: The Fly.io organization name.
-- `FLY_PREFIX`: The prefix for the Fly.io app names.
-- `POSTGRES_PASSWORD`: The password for the PostgreSQL service.
-- `JWT_SECRET`: The secret for JWT tokens.
-- `ANON_KEY`: The anonymous key for the Auth service (automatically created if not provided).
-- `SERVICE_ROLE_KEY`: The service role key for the Auth service (automatically created if not provided).
-- `POSTGRES_DB`: The database name for PostgreSQL.
-- `POSTGRES_PORT`: The port for the PostgreSQL service.
-- `KONG_HTTP_PORT`: The port for the Kong HTTP service.
-- `PGRST_DB_SCHEMAS`: The database schemas exposed by PostgREST.
-- `PGRST_LOG_LEVEL`: The log level for PostgREST.
-- `SITE_URL`: Accepted URL for the Auth service.
-- `ADDITIONAL_REDIRECT_URLS`: Additional redirect URLs for the Auth service.
-- `JWT_EXPIRY`: The expiry time for JWT tokens.
-- `DISABLE_SIGNUP`: Disables signups for the Auth service.
-- `MAILER_URLPATHS_*`: The URL paths for the mailer service.
-- `ENABLE_EMAIL_SIGNUP`: Enables email signups for the Auth service.
-- `ENABLE_EMAIL_AUTOCONFIRM`: Enables auto-confirmation for email signups.
-- `SMTP_*`: The SMTP configuration for the Auth mailer service.
-- `ENABLE_ANONYMOUS_USERS`: Enables anonymous users for the Auth service.
-- `ENABLE_PHONE_SIGNUP`: Enables phone signups for the Auth service.
-- `ENABLE_PHONE_AUTOCONFIRM`: Enables auto-confirmation for phone signups.
-- `STUDIO_DEFAULT_ORGANIZATION`: The default organization for the Studio service.
-- `STUDIO_DEFAULT_PROJECT`: The default project for the Studio service.
-- `STUDIO_PORT`: Internal port for the Studio service.
-- `IMGPROXY_ENABLE_WEBP_DETECTION`: Enables WebP detection for the imgproxy service.
-- `FUNCTIONS_VERIFY_JWT`: Verifies JWT tokens for the Functions service.
-- `MINIO_ROOT_USER`: The root user for Minio.
-- `MINIO_ROOT_PASSWORD`: The root password for Minio.
-- `STORAGE_AWS_ACCESS_KEY_ID`: The access key ID for storage.
-- `STORAGE_AWS_SECRET_ACCESS_KEY`: The secret access key for storage.
-- `LOGFLARE_API_KEY`: The API key for Logflare.
-- `LOGFLARE_LOGGER_BACKEND_API_KEY`: The backend API key for Logflare.
-- `GOOGLE_PROJECT_ID`: The project ID for Google BigQuery.
-- `GOOGLE_PROJECT_NUMBER`: The project number for Google BigQuery.
-- `FLY_LOG_SHIPPER_ACCESS_KEY`: The access key for Fly Log Shipper (automatically created if not provided).
-
 ## Deploying Edge Functions
 
-To deploy edge functions to the deployed edge function server:
+The edge functions to deploy are configured by the `FUNCTIONS_DIR` variable and deployed along with the app initially.
 
-1. Make sure, the edge function server is deployed, e.g. by running the `deploy-all.sh` script.
+To deploy updated edge functions, you can either destroy the functions app and deploy it anew, or use the `deployFunctions.ts` script to deploy only the edge functions without redeploying the entire app:
+
+1. Make sure, the edge function server is deployed and running, e.g. by running the `deploy-all.sh` script.
 2. Navigate to the generated app directory for the edge function server, typically `fly/functions`.
-3. To deploy functions from `~/project/supabase/functions`, run:
+3. Run:
 ```sh
-npx tsx deployFunctions.ts ~/project/supabase/functions
+npx tsx deployFunctions.ts
 ```
 
-The script will connect to the Fly.io app for the edge functions, upload the function definitions to the app's volume and set up the necessary secrets from the `.env` file in the specified directory.
+The script will connect to the Fly.io app for the edge functions, upload the new function definitions to the app's volume and set up the necessary secrets from the `.env` file in the specified directory.
+
+You can also point the script to a different functions directory (e.g. `volumes/functions` to redeploy the originally deployed functions) by passing the functions-dir as an argument:
+
+```sh
+npx tsx deployFunctions.ts <my-functions-dir>
+```
 
 ## Customization
 

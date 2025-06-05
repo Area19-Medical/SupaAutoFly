@@ -4,6 +4,7 @@ import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as tar from "tar";
 import * as dotenv from "dotenv";
+import "dotenv/config";
 
 async function deploy(functionDir: string) {
   console.log(`Deploying functions from directory: ${functionDir}`);
@@ -53,14 +54,14 @@ async function installSecrets(functionDir: string) {
 }
 
 async function main() {
-  const functionDir = process.argv[2];
-  if (!functionDir) {
-    console.info("Usage: deployFunctions.ts <functionDir>");
+  const functionsDir = process.argv[2] || process.env.FUNCTIONS_DIR;
+  if (!functionsDir) {
+    console.info("Usage: deployFunctions.ts <functionsDir>");
     console.info("Example: deployFunctions.ts ~/project/supabase/functions");
     process.exit(1);
   }
-  await deploy(functionDir);
-  await installSecrets(functionDir);
+  await deploy(functionsDir);
+  await installSecrets(functionsDir);
 }
 
 main()
