@@ -1,6 +1,10 @@
 # SupaAutoFly
 
-This script automates the self-hosted deployment of the [supabase](https://supabase.com) stack on [Fly.io](https://fly.io). It clones the [supabase repository](https://github.com/supabase/supabase), sets up the necessary configurations, and generates `fly.toml` files for each service defined in the `docker-compose.yml` file.
+This script automates the self-hosted deployment of the
+[supabase](https://supabase.com) stack on [Fly.io](https://fly.io). It clones
+the [supabase repository](https://github.com/supabase/supabase), sets up the
+necessary configurations, and generates `fly.toml` files for each service
+defined in the `docker-compose.yml` file.
 
 ## Prerequisites
 
@@ -18,13 +22,14 @@ git clone https://github.com/SupaAutoFly/SupaAutoFly
 cd SupaAutoFly
 ```
 
-2. Create a `.env` file with the required environment variables. You can use the `.env.example` file as a reference:
+2. Create a `.env` file with the required environment variables. You can use the
+   `.env.example` file as a reference:
 
 ```sh
 cp .env.example .env
 ```
 
-3. Install the necessary dependencies:
+1. Install the necessary dependencies:
 
 ```sh
 yarn
@@ -46,7 +51,8 @@ _Make sure to set up secure secrets._
 ```
 or `npx tsx makeFly.ts` if your shell cannot process shebangs.
 
-2. The script will generate a `fly` directory containing `fly.toml` files for each service and deployment scripts.
+2. The script will generate a `fly` directory containing `fly.toml` files for
+   each service and deployment scripts.
 
 3. To deploy all services, run:
 
@@ -62,48 +68,124 @@ or `npx tsx makeFly.ts` if your shell cannot process shebangs.
 
 ## Deploying Edge Functions
 
-The edge functions to deploy are configured by the `FUNCTIONS_DIR` variable and deployed along with the app initially.
+The edge functions to deploy are configured by the `FUNCTIONS_DIR` variable and
+deployed along with the app initially.
 
-To deploy updated edge functions, you can either destroy the functions app and deploy it anew, or use the `deployFunctions.ts` script to deploy only the edge functions without redeploying the entire app:
+To deploy updated edge functions, you can either destroy the functions app and
+deploy it anew, or use the `deployFunctions.ts` script to deploy only the edge
+functions without redeploying the entire app:
 
-1. Make sure, the edge function server is deployed and running, e.g. by running the `deploy-all.sh` script.
-2. Navigate to the generated app directory for the edge function server, typically `fly/functions`.
+1. Make sure, the edge function server is deployed and running, e.g. by running
+   the `deploy-all.sh` script.
+2. Navigate to the generated app directory for the edge function server,
+   typically `fly/functions`.
 3. Run:
 ```sh
 npx tsx deployFunctions.ts
 ```
 
-The script will connect to the Fly.io app for the edge functions, upload the new function definitions to the app's volume and set up the necessary secrets from the `.env` file in the specified directory.
+The script will connect to the Fly.io app for the edge functions, upload the new
+function definitions to the app's volume and set up the necessary secrets from
+the `.env` file in the specified directory.
 
-You can also point the script to a different functions directory (e.g. `volumes/functions` to redeploy the originally deployed functions) by passing the functions-dir as an argument:
+You can also point the script to a different functions directory (e.g.
+`volumes/functions` to redeploy the originally deployed functions) by passing
+the functions-dir as an argument:
 
 ```sh
 npx tsx deployFunctions.ts <my-functions-dir>
 ```
 
 ## Changing the Postgres password
-If you need to change the Postgres password after the initial deployment, you can do so by running the following command:
+If you need to change the Postgres password after the initial deployment, you
+can do so by running the following command:
 
 ```sh
 cd fly
 ./passwdDb.ts
 ```
 
-This will query for a new password (minimum 16 characters, cannot contain `/`) twice, install it in the `db` container and save it to the `.env` file.
+This will query for a new password (minimum 16 characters, cannot contain `/`)
+twice, install it in the `db` container and save it to the `.env` file.
 
-_Important:_ You will need to copy the new `.env` file to the SupaAutoFly root directory and run `./makeFly.ts` and `./fly/deploy-all.sh` again to update all dependent services with the new password as well!
+_Important:_ You will need to copy the new `.env` file to the SupaAutoFly root
+directory and run `./makeFly.ts` and `./fly/deploy-all.sh` again to update all
+dependent services with the new password as well!
+
+## Backups with Point-in-Time Recovery (PITR)
+
+### WAL-G Backup Configuration
+
+You can optionally configure WAL-G for backups: Use either SSH or S3 for
+backups, but not both at the same time. (If both are configured, the S3
+configuration will be used.) S3 configuration has been tested with Tigris object
+storage as offered via fly.io.
+
+When configured, Postgres will automatically archive WAL segments at a
+configurable maximum interval (default: 2 minutes).
+
+For creating base-backups, `/usr/local/bin/make-base-backup.sh` is added to the
+`db` service and accessible via the shell (to be run as user `postgres`) and the
+`backup.make_base_backup` postgres function. The intent is to set up a `pg_cron`
+job in supabase to run this function periodically, e.g. every 24 hours.
+`make-base-backup.sh` will also delete old base backups to keep the number of
+backups within the configured limit (default: 7).
+
+WAL-G logs are stored persistently at `/var/log/wal-g`.
+
+### WAL-G Restore Procedure
+
+_Do try this out before you need it in production!_
+
+Base reference: [Continuous PostgreSQL Backups using WAL-G](https://supabase.com/blog/continuous-postgresql-backup-walg)
+
+1. `cd fly/db`
+2. Add the following to the `fly.toml` file:
+```toml
+[[files]]
+local_path = "/dev/null"
+guest_path = "/etc/maintenance_mode"
+```
+1. `./deploy.sh`: This will start the app in maintenance mode in which postgres
+   will not be started immediately.
+2. `fly ssh console`
+3. `su postgres`
+4. `rm -r ~/data/*` (it's broken anyway, right!?)
+5. `wal-g backup-fetch ~/data LATEST` (or specify an earlier backup listed by
+   `wal-g backup-list` if you need to roll back past the latest backup)
+6. `touch ~/data/recovery.signal`
+7. `exit` (back to root)
+8. Optional: Configure point-in-time recovery (otherwise the latest point in
+   time will be restored):
+    1.  `apt update && apt install nano`
+    2.  `nano /etc/postgresql-custom/wal-g.conf`
+    3.  Uncomment and set `recovery_target_time`
+9.  `rm /etc/maintenance_mode`
+10. Wait for postgres to complete recovery (see `fly logs`). During this time,
+    WAL-G will retrieve needed WAL segments from the backup storage. Startup
+    checks for `/etc/maintenance_mode` only once per minute.
+11. `psql -U postgres` and inspect the restored database
+12. `exit` the ssh console
+13. Remove the maintenance mode file from `fly.toml`
+14. `./deploy.sh` again to restart the app without maintenance mode.
+
 
 ## Customization
 
-You can customize the deployment by modifying the `makeMetadata` function and the `extraServices` object in the `makeFly.ts` script.
+You can customize the deployment by modifying the `makeMetadata` function and
+the `extraServices` object in the `makeFly.ts` script.
 
-Because this is focussed on deploying Supabase, the script is not designed to be a generic docker-compose to Fly.io converted. Docker-compose is way too rich to make this feasible.
+Because this is focussed on deploying Supabase, the script is not designed to
+be a generic docker-compose to fly.io converter. Docker-compose is way too rich
+in features to make this feasible in the scope of this project.
 
 ## Limitations
 
-- The script currently does not convert health checks from the `docker-compose.yml` file.
+- The script currently does not convert health checks from the
+  `docker-compose.yml` file.
 - The dependency resolution is simplistic.
-- Edge functions currently do not support the [`config.toml`](https://supabase.com/docs/guides/functions/development-tips#using-configtoml) file. There is just a global `VERIFY_JWT` variable for all functions.
+- Edge functions currently do not support the [`config.toml`](https://supabase.com/docs/guides/functions/development-tips#using-configtoml)
+  file. There is just a global `VERIFY_JWT` variable for all functions.
 
 ## License
 

@@ -88,6 +88,56 @@ function makeMetadata(prefix: string): Metadata {
       ha: false,
       extraPorts: ["${POSTGRES_PORT}:${POSTGRES_PORT}"],
       rawPorts: ["${POSTGRES_PORT}"],
+      env: {
+        PAGER: "more",
+        WALG_S3_PREFIX: "${WALG_S3_PREFIX}",
+        WALG_S3_REGION: "${WALG_S3_REGION}",
+        WALG_S3_ENDPOINT: "${WALG_S3_ENDPOINT}",
+        WALG_SSH_PREFIX: "${WALG_SSH_PREFIX}",
+        WALG_SSH_PORT: "${WALG_SSH_PORT:-22}",
+        WALG_SSH_USERNAME: "${WALG_SSH_USERNAME}",
+        WALG_COMPRESSION_METHOD: "${WALG_COMPRESSION_METHOD:-zstd}",
+        WALG_LIBSODIUM_KEY_TRANSFORM: "${WALG_LIBSODIUM_KEY_TRANSFORM:-base64}",
+      },
+      secrets: {
+        WALG_S3_ACCESS_KEY_ID: "${WALG_S3_ACCESS_KEY_ID}",
+        WALG_S3_SECRET_ACCESS_KEY: "${WALG_S3_SECRET_ACCESS_KEY}",
+        WALG_SSH_PRIVATE_KEY: "${WALG_SSH_PRIVATE_KEY}",
+        WALG_LIBSODIUM_KEY: "${WALG_LIBSODIUM_KEY}",
+      },
+      extraVolumes: [
+        "./volumes/db/make-walg.json.sh:/usr/local/bin/make-walg.json.sh",
+        "./volumes/db/make-wal-g.conf.sh:/usr/local/bin/make-wal-g.conf.sh",
+        "./volumes/db/make-base-backup.sh:/usr/local/bin/make-base-backup.sh",
+        "./volumes/db/backup.sql:/usr/local/share/wal-g/backup.sql",
+        "./volumes/db/setup-backup.sh:/usr/local/bin/setup-backup.sh",
+        "wal-g-logs:/var/log/wal-g",
+      ],
+      extraContainerSetup: dedent`
+          if [ -n "\\$WALG_SSH_PRIVATE_KEY" ]; then
+            echo "Setting up SSH private key for WAL-G"
+            mkdir -p ~postgres/.ssh
+            export WALG_SSH_PRIVATE_KEY_PATH=$(echo ~postgres/.ssh/backup_id)
+            echo "\\$WALG_SSH_PRIVATE_KEY" > \\$WALG_SSH_PRIVATE_KEY_PATH
+            chmod 600 \\$WALG_SSH_PRIVATE_KEY_PATH
+            chown postgres:postgres \\$WALG_SSH_PRIVATE_KEY_PATH
+          fi
+          if [ ! -f ~postgres/.walg.json ]; then
+            echo "Creating ~postgres/.walg.json"
+            bash /usr/local/bin/make-walg.json.sh > ~postgres/.walg.json
+          fi
+          if [ ! -f /etc/postgresql-custom/wal-g.conf ]; then
+            echo "Creating /etc/postgresql-custom/wal-g.conf"
+            bash /usr/local/bin/make-wal-g.conf.sh > /etc/postgresql-custom/wal-g.conf
+          fi
+          mkdir -p /var/log/wal-g
+          chown postgres:postgres /var/log/wal-g
+          while [ -e /etc/maintenance_mode ]; do
+            echo "Maintenance mode is enabled, deferring database startup"
+            sleep 60
+          done
+          /usr/local/bin/setup-backup.sh "\\$@"
+          `,
     },
     auth: {
       ha: true,
@@ -308,6 +358,7 @@ function addFile(
   containerPath: string
 ): void {
   if (!fs.statSync(localPath, { throwIfNoEntry: false })?.isFile()) {
+    console.warn(`Skipping non-file / missing file ${localPath}`);
     return;
   }
 
@@ -366,6 +417,9 @@ function makeFly(inputContext: {
   function mapUnqualifiedUrl(value: string): string {
     try {
       const url = new URL(value);
+      if (url.protocol === "s3:") {
+        return value; // Not a URL we map
+      }
       const origName = url.hostname;
       if (url.hostname !== "localhost") {
         // allow dev-redirects to localhost
@@ -378,6 +432,13 @@ function makeFly(inputContext: {
       return newUrl;
     } catch (error) {
       // Not a URL
+    }
+    return value;
+  }
+
+  function quoteMultilineSecret(value: string): string {
+    if (value.includes("\n")) {
+      return `"""${value}"""`;
     }
     return value;
   }
@@ -634,7 +695,9 @@ function makeFly(inputContext: {
       let secretValue = secrets[secretName];
       if (secretValue === true)
         secretValue = composeData.environment[secretName];
-      const secretValueExpanded = mapUnqualifiedUrl(expandEnvVars(secretValue));
+      const secretValueExpanded = quoteMultilineSecret(
+        mapUnqualifiedUrl(expandEnvVars(secretValue))
+      );
       expandedSecrets.push(`${secretName}=${secretValueExpanded}`);
     }
     fs.writeSync(
@@ -717,7 +780,8 @@ function generateDockerfile(
         EOF
 
         COPY --chmod=755 <<EOF /usr/local/bin/fly-entrypoint.sh
-        #!/bin/sh\n
+        #!/bin/sh
+        set -e\n
         `
   );
   mounts.forEach((mount: any) => {
