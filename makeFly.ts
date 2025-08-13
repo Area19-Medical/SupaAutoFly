@@ -122,14 +122,10 @@ function makeMetadata(prefix: string): Metadata {
             chmod 600 \\$WALG_SSH_PRIVATE_KEY_PATH
             chown postgres:postgres \\$WALG_SSH_PRIVATE_KEY_PATH
           fi
-          if [ ! -f ~postgres/.walg.json ]; then
-            echo "Creating ~postgres/.walg.json"
-            bash /usr/local/bin/make-walg.json.sh > ~postgres/.walg.json
-          fi
-          if [ ! -f /etc/postgresql-custom/wal-g.conf ]; then
-            echo "Creating /etc/postgresql-custom/wal-g.conf"
-            bash /usr/local/bin/make-wal-g.conf.sh > /etc/postgresql-custom/wal-g.conf
-          fi
+          echo "Creating ~postgres/.walg.json"
+          bash /usr/local/bin/make-walg.json.sh > ~postgres/.walg.json
+          echo "Creating /etc/postgresql-custom/wal-g.conf"
+          bash /usr/local/bin/make-wal-g.conf.sh > /etc/postgresql-custom/wal-g.conf
           mkdir -p /var/log/wal-g
           chown postgres:postgres /var/log/wal-g
           while [ -e /etc/maintenance_mode ]; do
