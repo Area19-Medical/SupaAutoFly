@@ -22,14 +22,7 @@ git clone https://github.com/SupaAutoFly/SupaAutoFly
 cd SupaAutoFly
 ```
 
-2. Create a `.env` file with the required environment variables. You can use the
-   `.env.example` file as a reference:
-
-```sh
-cp .env.example .env
-```
-
-1. Install the necessary dependencies:
+2. Install necessary dependencies:
 
 ```sh
 yarn
@@ -38,7 +31,11 @@ yarn
 ## Configuration
 
 The supabase deployment is configured by environment variables in a `.env` file.
-Please see the [`.env.example`](.env.example) file for reference.
+Start with the [`.env.example`](.env.example) file as reference:
+
+```sh
+cp .env.example .env
+```
 
 _Make sure to set up secure secrets._
 
@@ -105,7 +102,7 @@ cd fly
 ./passwdDb.ts
 ```
 
-This will query for a new password (minimum 16 characters, cannot contain `/`)
+This will query for a new password (minimum 16 characters, can only contain `[a-zA-Z0-9_]`)
 twice, install it in the `db` container and save it to the `.env` file.
 
 _Important:_ You will need to copy the new `.env` file to the SupaAutoFly root
@@ -126,8 +123,16 @@ configurable maximum interval (default: 2 minutes).
 
 For creating base-backups, `/usr/local/bin/make-base-backup.sh` is added to the
 `db` service and accessible via the shell (to be run as user `postgres`) and the
-`backup.make_base_backup` postgres function. The intent is to set up a `pg_cron`
-job in supabase to run this function periodically, e.g. every 24 hours.
+`backup.make_base_backup()` postgres function. The intent is to set up a `pg_cron`
+job in supabase to run this function periodically, e.g. every 24 hours. To run a
+nightly base-backup at 04:17 UTC, you could use:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+SELECT cron.schedule('WAL-G base backup', '17 04 * * *', 'SELECT backup.make_base_backup()');
+```
+
+
 `make-base-backup.sh` will also delete old base backups to keep the number of
 backups within the configured limit (default: 7).
 
@@ -150,7 +155,8 @@ guest_path = "/etc/maintenance_mode"
    will not be started immediately.
 2. `fly ssh console`
 3. `su postgres`
-4. `rm -r ~/data/*` (it's broken anyway, right!?)
+4. `rm -r ~/data/*` ( ⚠️ this deletes your database but it's broken
+   anyway, right!?)
 5. `wal-g backup-fetch ~/data LATEST` (or specify an earlier backup listed by
    `wal-g backup-list` if you need to roll back past the latest backup)
 6. `touch ~/data/recovery.signal`
@@ -160,13 +166,14 @@ guest_path = "/etc/maintenance_mode"
     1.  `apt update && apt install nano`
     2.  `nano /etc/postgresql-custom/wal-g.conf`
     3.  Uncomment and set `recovery_target_time`
-9.  `rm /etc/maintenance_mode`
+9.  `rm /etc/maintenance_mode` will end maintenance mode and start the
+    postgres service. Startup checks for `/etc/maintenance_mode` only once per
+    minute. A delay is expected.
 10. Wait for postgres to complete recovery (see `fly logs`). During this time,
-    WAL-G will retrieve needed WAL segments from the backup storage. Startup
-    checks for `/etc/maintenance_mode` only once per minute.
+    WAL-G will retrieve needed WAL segments from the backup storage.
 11. `psql -U postgres` and inspect the restored database
 12. `exit` the ssh console
-13. Remove the maintenance mode file from `fly.toml`
+13. Remove the maintenance mode `[[files]]` section from `fly.toml`
 14. `./deploy.sh` again to restart the app without maintenance mode.
 
 
