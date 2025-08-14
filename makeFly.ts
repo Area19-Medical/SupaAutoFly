@@ -17,6 +17,8 @@ import { expandEnvVars } from "./expandEnvVars";
 const baseRepo = "https://github.com/supabase/supabase.git";
 const baseBranch = "1.25.04";
 
+const gitConfig = "-c advice.detachedHead=false -c core.autocrlf=input";
+
 const org = process.env.FLY_ORG || "personal";
 
 const defaultVm = {
@@ -628,7 +630,7 @@ function makeFly(inputContext: {
       fs.rmSync(buildDir, { recursive: true, force: true });
       fs.mkdirSync(buildDir, { recursive: true });
       execSync(
-        `git clone -c advice.detachedHead=false --depth 1 -b ${branch} ${repo} ${buildDir}`,
+        `git clone ${gitConfig} --depth 1 -b ${branch} ${repo} ${buildDir}`,
         { stdio: "inherit" }
       );
       execSync(`docker build -t ${metadata.image} ${buildDir}`, {
@@ -1018,7 +1020,7 @@ function clone() {
     console.log("Supabase repo already exists. Skipping clone.");
     return;
   }
-  execSync(`git clone --filter=blob:none --no-checkout ${baseRepo} supabase`, {
+  execSync(`git clone ${gitConfig} --filter=blob:none --no-checkout ${baseRepo} supabase`, {
     stdio: "inherit",
   });
   execSync(`git sparse-checkout set --cone docker`, {
