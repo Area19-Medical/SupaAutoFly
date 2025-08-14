@@ -717,6 +717,7 @@ function makeFly(inputContext: {
         ${(() => {
           if ((metadata?.image ?? "").startsWith("registry.fly.io/"))
             return dedent`
+                    fly auth docker
                     docker push ${metadata.image}
                     \n`;
           return "";
