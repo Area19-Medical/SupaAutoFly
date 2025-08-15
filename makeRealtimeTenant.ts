@@ -1,7 +1,7 @@
 #!/bin/env -S npx tsx
 
 import {sign} from 'jsonwebtoken';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import "dotenv/config";
 
 const url = 'http://localhost:4000/api/tenants';
@@ -27,7 +27,7 @@ function singleQuote(str: string) {
 }
 
 function runFly(cmd: string) {
-  execSync(`fly ssh console -C ${singleQuote(`/bin/sh -c ${singleQuote(cmd)}`)}`, {stdio: 'inherit'});
+  execFileSync('fly', ['ssh', 'console', '-C', `/bin/sh -c ${singleQuote(cmd)}`], { stdio: 'inherit' });
 }
 
 async function main() {
