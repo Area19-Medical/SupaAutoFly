@@ -685,9 +685,13 @@ function makeFly(inputContext: {
     ...metadata?.secrets,
   };
   if (Object.keys(secrets).length > 0) {
-    console.log(`Making secrets.sh for ${name}`);
-    const secretsSh = fs.openSync(`${dir}/secrets.sh`, "w");
-    fs.writeSync(secretsSh, "#!/bin/sh\n");
+    console.log(`Making secrets.ts for ${name}`);
+    const secretsTs = fs.openSync(`${dir}/secrets.ts`, "w");
+    fs.writeSync(
+      secretsTs,
+      dedent`#!/bin/env -S npx tsx
+      import { execSync } from "node:child_process";
+      \n`);
     const expandedSecrets: string[] = [];
     for (const secretName in secrets) {
       let secretValue = secrets[secretName];
@@ -699,41 +703,69 @@ function makeFly(inputContext: {
       expandedSecrets.push(`${secretName}=${secretValueExpanded}`);
     }
     fs.writeSync(
-      secretsSh,
-      `fly secrets import --stage -a ${prefix}-${name} <<'EOF'\n`
-    );
-    fs.writeSync(secretsSh, [...expandedSecrets, "EOF", ""].join("\n"));
-    fs.closeSync(secretsSh);
-    fs.chmodSync(`${dir}/secrets.sh`, 0o755);
+      secretsTs,
+      dedent`execSync("fly secrets import --stage -a ${prefix}-${name}", {
+        input: ${JSON.stringify(expandedSecrets.join("\n"))},
+        stdio: ["pipe", "inherit", "inherit"],
+      });
+      `);
+    fs.chmodSync(`${dir}/secrets.ts`, 0o755);
   }
 
   fs.writeFileSync(
-    `${dir}/deploy.sh`,
+    `${dir}/deploy.ts`,
     dedent`
-        #!/bin/sh
-        set -o errexit
+        #!/bin/env -S npx tsx
+        import { execSync } from "node:child_process";
+        import { existsSync } from "node:fs";
 
-        if ! fly status --app ${prefix}-${name} &>/dev/null; then
-            fly apps create --org ${org} --name ${prefix}-${name}
-        fi
+        try {
+          execSync("fly status --app ${prefix}-${name}", { stdio: "ignore" });
+        } catch (error) {
+          execSync("fly apps create --org ${org} --name ${prefix}-${name}", { stdio: "inherit" });
+        }
+
         ${(() => {
           if ((metadata?.image ?? "").startsWith("registry.fly.io/"))
             return dedent`
-                    fly auth docker
-                    docker push ${metadata.image}
+                    execSync("fly auth docker", { stdio: "inherit" });
+                    execSync("docker push ${metadata.image}", { stdio: "inherit" });
                     \n`;
           return "";
         })()}
-        [ -e secrets.sh ] && ./secrets.sh
-        fly deploy --no-public-ips --ha=${metadata?.ha ?? false}
+
+        if (existsSync("secrets.ts")) {
+          execSync("npx tsx secrets.ts", { stdio: "inherit" });
+        }
+
+        execSync("fly deploy --no-public-ips --ha=${metadata?.ha ?? false}", { stdio: "inherit" });
         ${(() => {
           if (metadata?.ip === "flycast")
-            return "fly ips list | grep v6 || fly ips allocate-v6 --private\n";
+            return dedent`\n
+              if (!execSync("fly ips list", {
+                stdio: ['inherit', 'pipe', 'inherit'],
+                encoding: "utf8"
+              }).includes("v6")) {
+                execSync("fly ips allocate-v6 --private", { stdio: "inherit" });
+              }
+              \n
+            `;
           if (flyConfig.services.length > 0)
-            return dedent`
-                    fly ips list | grep v6 || fly ips allocate-v6
-                    fly ips list | grep v4 || fly ips allocate-v4 --shared
-                    \n`;
+            return dedent`\n
+              if (!execSync("fly ips list", {
+                stdio: ['inherit', 'pipe', 'inherit'],
+                encoding: "utf8"
+              }).includes("v6")) {
+                execSync("fly ips allocate-v6", { stdio: "inherit" });
+              }
+              if (!execSync("fly ips list", {
+                stdio: ['inherit', 'pipe', 'inherit'],
+                encoding: "utf8"
+              }).includes("v4")) {
+                execSync("fly ips allocate-v4 --shared", { stdio: "inherit" });
+              }
+              \n
+            `;
           return "";
         })()}
         ${(metadata?.extraDeployment ?? [])
@@ -743,7 +775,7 @@ function makeFly(inputContext: {
           .join("\n")}
         \n`
   );
-  fs.chmodSync(`${dir}/deploy.sh`, 0o755);
+  fs.chmodSync(`${dir}/deploy.ts`, 0o755);
 
   return stringify(flyConfig) + "\n";
 }
@@ -928,8 +960,8 @@ function makeRealtimeTenantSetup(context: {
   fs.copyFileSync("./.env", `${dir}/.env`);
   fs.copyFileSync("./makeRealtimeTenant.ts", `${dir}/makeRealtimeTenant.ts`);
   return dedent`
-        ./makeRealtimeTenant.ts ${prefix}-${name}
-        `;
+    execSync("npx tsx makeRealtimeTenant.ts ${prefix}-${name}", { stdio: "inherit" });
+  `;
 }
 
 function installDeployFunctions(context: {
@@ -1176,70 +1208,93 @@ async function main() {
   // console.log(JSON.stringify(dependencyGraph, null, 2));
   const appOrder = solveDependencies(dependencyGraph);
 
-  const deployAllSh = fs.openSync(`${flyDir}/deploy-all.sh`, "w");
+  const deployAllTs = fs.openSync(`${flyDir}/deploy-all.ts`, "w");
   fs.writeSync(
-    deployAllSh,
+    deployAllTs,
     dedent`
-        #!/bin/sh
-        set -o errexit\n\n
-        `
+        #!/bin/env -S npx tsx
+        import { execSync } from 'child_process';
+
+        process.chdir(__dirname);
+        \n`
   );
   appOrder.forEach((serviceName: string) => {
     fs.writeSync(
-      deployAllSh,
-      dedent`
-            echo -e "\\n>>> Deploying ${serviceName}"
-            pushd ${serviceName} &>/dev/null
-            ./deploy.sh
-            popd &>/dev/null\n\n
-            `
+      deployAllTs,
+      dedent`\n
+            console.log("Deploying ${serviceName}");
+            execSync("npx tsx deploy.ts", {
+              stdio: "inherit",
+              cwd: "${serviceName}"
+            });
+            \n`
     );
   });
   fs.writeSync(
-    deployAllSh,
-    dedent`
-        cat <<EOF
+    deployAllTs,
+    dedent`\n
+        console.log(\`
         >>> All apps deployed!
         Find your supabase studio at: https://${prefix}-kong.fly.dev
-        EOF
+        \`);
         \n`
   );
-  fs.closeSync(deployAllSh);
-  fs.chmodSync(`${flyDir}/deploy-all.sh`, 0o755);
+  fs.closeSync(deployAllTs);
+  fs.chmodSync(`${flyDir}/deploy-all.ts`, 0o755);
 
-  const destroyAllSh = fs.openSync(`${flyDir}/destroy-all.sh`, "w");
+  const destroyAllTs = fs.openSync(`${flyDir}/destroy-all.ts`, "w");
   fs.writeSync(
-    destroyAllSh,
+    destroyAllTs,
     dedent`
-        #!/bin/sh
-        set -o errexit
+        #!/bin/env -S npx tsx
+        import { spawnSync } from 'child_process';
+        import { prompt } from 'enquirer';
 
-        cat <<EOF
-        ** This will tear down the complete supabase deployment and **
-        ** DELETE all volumes with all DATA!                        **
+        process.chdir(__dirname);
 
-        The prefix is: "${prefix}"
+        async function main() {
+          console.log(\`** This will tear down the complete supabase deployment and **
+          ** DELETE all volumes with all DATA!                        **
 
-        EOF
-        read -p "Please enter the prefix to proceed (anything else will quit): " -r
-        if [[ "$REPLY" != "${prefix}" ]];
-        then
-            exit 0
-        fi
+          The prefix is: "${prefix}"
+          \`)
 
+          const { prefix } = await prompt({
+            type: "input",
+            name: "prefix",
+            message: "Please enter the prefix to proceed (anything else will quit): ",
+          });
+          if (prefix !== "${prefix}") {
+              process.exit(0);
+          }
         `
   );
   appOrder.reverse().forEach((serviceName: string) => {
     fs.writeSync(
-      destroyAllSh,
+      destroyAllTs,
       dedent`
-            echo -e "\\n>>> Destroying ${serviceName}"
-            fly apps destroy ${prefix}-${serviceName} --yes || true
-            \n`
+            console.log(\`>>> Destroying ${serviceName}\`);
+            // ignore failure (might not exist)
+            spawnSync("fly", ["apps", "destroy", "${prefix}-${serviceName}", "--yes"], {
+              stdio: "inherit",
+            });
+          \n`
     );
   });
-  fs.closeSync(destroyAllSh);
-  fs.chmodSync(`${flyDir}/destroy-all.sh`, 0o755);
+  fs.writeSync(
+    destroyAllTs,
+    dedent`
+    }
+
+    main().catch((err) => {
+      const errMsg = "message" in err ? String(err.message) : String(err);
+      console.error(\`Aborted\${errMsg ? \` (\${errMsg})\` : ''}.\`);
+      process.exit(1);
+    });
+    `
+  );
+  fs.closeSync(destroyAllTs);
+  fs.chmodSync(`${flyDir}/destroy-all.ts`, 0o755);
 
   fs.copyFileSync("./.env", `${flyDir}/.env`);
   fs.copyFileSync("./passwdDb.ts", `${flyDir}/passwdDb.ts`);

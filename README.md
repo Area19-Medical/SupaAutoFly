@@ -54,14 +54,16 @@ or `npx tsx makeFly.ts` if your shell cannot process shebangs.
 3. To deploy all services, run:
 
 ```sh
-./fly/deploy-all.sh
+fly/deploy-all.ts
 ```
+(or `npx tsx fly/deploy-all.ts`)
 
 4. To destroy all services, run:
 
 ```sh
-./fly/destroy-all.sh
+fly/destroy-all.ts
 ```
+(or `npx tsx fly/destroy-all.ts`)
 
 ## Deploying Edge Functions
 
@@ -73,7 +75,7 @@ deploy it anew, or use the `deployFunctions.ts` script to deploy only the edge
 functions without redeploying the entire app:
 
 1. Make sure, the edge function server is deployed and running, e.g. by running
-   the `deploy-all.sh` script.
+   the `deploy-all.ts` script.
 2. Navigate to the generated app directory for the edge function server,
    typically `fly/functions`.
 3. Run:
@@ -106,7 +108,7 @@ This will query for a new password (minimum 16 characters, can only contain `[a-
 twice, install it in the `db` container and save it to the `.env` file.
 
 _Important:_ You will need to copy the new `.env` file to the SupaAutoFly root
-directory and run `./makeFly.ts` and `./fly/deploy-all.sh` again to update all
+directory and run `./makeFly.ts` and `./fly/deploy-all.ts` again to update all
 dependent services with the new password as well!
 
 ## Backups with Point-in-Time Recovery (PITR)
@@ -151,7 +153,7 @@ Base reference: [Continuous PostgreSQL Backups using WAL-G](https://supabase.com
 local_path = "/dev/null"
 guest_path = "/etc/maintenance_mode"
 ```
-1. `./deploy.sh`: This will start the app in maintenance mode in which postgres
+1. `./deploy.ts`: This will start the app in maintenance mode in which postgres
    will not be started immediately.
 2. `fly ssh console`
 3. `su postgres`
@@ -174,7 +176,7 @@ guest_path = "/etc/maintenance_mode"
 11. `psql -U postgres` and inspect the restored database
 12. `exit` the ssh console
 13. Remove the maintenance mode `[[files]]` section from `fly.toml`
-14. `./deploy.sh` again to restart the app without maintenance mode.
+14. `./deploy.ts` again to restart the app without maintenance mode.
 
 
 ## Customization

@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
-    "target": "ES2021",
-    "lib": ["ES2021"],
-    "module": "nodenext",
+    "target": "es2022",
+    "lib": ["ES2022"],
+    "module": "es2022",
+    "moduleResolution": "bundler",
   },
+  "include": ["*.ts"],
 }
