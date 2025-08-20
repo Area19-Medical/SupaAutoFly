@@ -26,6 +26,7 @@ const defaultVm = {
 };
 
 const dockerDir = "./supabase/docker/";
+const storageBackend = process.env.STORAGE_BACKEND || "minio";
 
 type FlyConfig = {
   app: string;
@@ -85,7 +86,7 @@ type Metadata = {
 };
 
 function makeMetadata(prefix: string): Metadata {
-  const storageS3Endpoint = process.env.STORAGE_BACKEND === "minio"
+  const storageS3Endpoint = storageBackend === "minio"
             ? `http://${prefix}-minio.internal:9000`
             : "${STORAGE_S3_ENDPOINT}"
   return {
@@ -200,14 +201,14 @@ function makeMetadata(prefix: string): Metadata {
         SERVER_HOST: "fly-local-6pn",
         STORAGE_BACKEND: "s3",
         STORAGE_S3_BUCKET:
-          process.env.STORAGE_BACKEND === "minio"
+          storageBackend === "minio"
             ? `${prefix}-storage`
             : "${STORAGE_S3_BUCKET}",
         STORAGE_S3_MAX_SOCKETS: 200,
         STORAGE_S3_ENDPOINT: storageS3Endpoint,
         STORAGE_S3_FORCE_PATH_STYLE: true,
         STORAGE_S3_REGION:
-          process.env.STORAGE_BACKEND === "minio"
+          storageBackend === "minio"
             ? "auto"
             : "${STORAGE_S3_REGION}",
         FILE_STORAGE_BACKEND_PATH: undefined,
@@ -217,7 +218,7 @@ function makeMetadata(prefix: string): Metadata {
         AWS_SECRET_ACCESS_KEY: "${STORAGE_AWS_SECRET_ACCESS_KEY}",
       },
       skipVolumes: ["./volumes/storage"],
-      extraDependsOn: process.env.STORAGE_BACKEND === "minio" ? ["minio"] : [],
+      extraDependsOn: storageBackend === "minio" ? ["minio"] : [],
     },
     imgproxy: {
       ha: true,
@@ -320,7 +321,7 @@ const extraServices: Record<string, any> = {
   },
 };
 
-if (process.env.STORAGE_BACKEND === "minio") {
+if (storageBackend === "minio") {
   extraServices.minio = {
     container_name: "minio",
     image: "minio/minio",
