@@ -85,6 +85,9 @@ type Metadata = {
 };
 
 function makeMetadata(prefix: string): Metadata {
+  const storageS3Endpoint = process.env.STORAGE_BACKEND === "minio"
+            ? `http://${prefix}-minio.internal:9000`
+            : "${STORAGE_S3_ENDPOINT}"
   return {
     db: {
       ha: false,
@@ -196,11 +199,17 @@ function makeMetadata(prefix: string): Metadata {
       env: {
         SERVER_HOST: "fly-local-6pn",
         STORAGE_BACKEND: "s3",
-        STORAGE_S3_BUCKET: `${prefix}-storage`,
+        STORAGE_S3_BUCKET:
+          process.env.STORAGE_BACKEND === "minio"
+            ? `${prefix}-storage`
+            : "${STORAGE_S3_BUCKET}",
         STORAGE_S3_MAX_SOCKETS: 200,
-        STORAGE_S3_ENDPOINT: `http://${prefix}-minio.internal:9000`,
+        STORAGE_S3_ENDPOINT: storageS3Endpoint,
         STORAGE_S3_FORCE_PATH_STYLE: true,
-        // STORAGE_S3_REGION: 'us-east-1',
+        STORAGE_S3_REGION:
+          process.env.STORAGE_BACKEND === "minio"
+            ? "auto"
+            : "${STORAGE_S3_REGION}",
         FILE_STORAGE_BACKEND_PATH: undefined,
       },
       secrets: {
@@ -208,7 +217,7 @@ function makeMetadata(prefix: string): Metadata {
         AWS_SECRET_ACCESS_KEY: "${STORAGE_AWS_SECRET_ACCESS_KEY}",
       },
       skipVolumes: ["./volumes/storage"],
-      extraDependsOn: ["minio"],
+      extraDependsOn: process.env.STORAGE_BACKEND === "minio" ? ["minio"] : [],
     },
     imgproxy: {
       ha: true,
@@ -216,7 +225,7 @@ function makeMetadata(prefix: string): Metadata {
         IMGPROXY_BIND: "fly-local-6pn:5001",
         IMGPROXY_LOCAL_FILESYSTEM_ROOT: undefined,
         IMGPROXY_USE_S3: true,
-        IMGPROXY_S3_ENDPOINT: `http://${prefix}-minio.internal:9000`,
+        IMGPROXY_S3_ENDPOINT: storageS3Endpoint,
       },
       secrets: {
         AWS_ACCESS_KEY_ID: "${STORAGE_AWS_ACCESS_KEY_ID}",
@@ -254,24 +263,24 @@ function makeMetadata(prefix: string): Metadata {
     minio: {
       ha: false,
       extraContainerSetup: dedent`
-                function setup_credentials() {
-                    while ! mc alias set local http://localhost:9000 \\\${MINIO_ROOT_USER} \\\${MINIO_ROOT_PASSWORD} &>/dev/null; do
-                        sleep 1
-                    done
-                    echo Succeeded setting up Minio alias >&2
-                    mc admin user add local \\\${STORAGE_AWS_ACCESS_KEY_ID} \\\${STORAGE_AWS_SECRET_ACCESS_KEY}
-                    mc admin policy attach local readwrite --user \\\${STORAGE_AWS_ACCESS_KEY_ID}
-                    mc mb local/${prefix}-storage
-                }
+        function setup_credentials() {
+            while ! mc alias set local http://localhost:9000 \\\${MINIO_ROOT_USER} \\\${MINIO_ROOT_PASSWORD} &>/dev/null; do
+                sleep 1
+            done
+            echo Succeeded setting up Minio alias >&2
+            mc admin user add local \\\${STORAGE_AWS_ACCESS_KEY_ID} \\\${STORAGE_AWS_SECRET_ACCESS_KEY}
+            mc admin policy attach local readwrite --user \\\${STORAGE_AWS_ACCESS_KEY_ID}
+            mc mb local/${prefix}-storage
+        }
 
-                setup_credentials &
+        setup_credentials &
 
-                args=("\\\$@")
-                if [ "\\\${args[1]}" = "/minio-data" ]; then
-                    args[1]="\\\$(realpath /minio-data)"
-                fi
-                set -- "\\\${args[@]}"\n
-                `,
+        args=("\\\$@")
+        if [ "\\\${args[1]}" = "/minio-data" ]; then
+            args[1]="\\\$(realpath /minio-data)"
+        fi
+        set -- "\\\${args[@]}"\n
+        `,
     },
     "fly-log-shipper": {
       ha: false,
@@ -294,20 +303,7 @@ function makeMetadata(prefix: string): Metadata {
 
 const substitutedServices = { vector: "fly-log-shipper" };
 
-const extraServices = {
-  minio: {
-    container_name: "minio",
-    image: "minio/minio",
-    environment: {
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER}",
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}",
-      STORAGE_AWS_ACCESS_KEY_ID: "${STORAGE_AWS_ACCESS_KEY_ID}",
-      STORAGE_AWS_SECRET_ACCESS_KEY: "${STORAGE_AWS_SECRET_ACCESS_KEY}",
-    },
-    ports: ["9001:9001"],
-    volumes: ["./volumes/minio:/minio-data"],
-    command: ["server", "/minio-data", "--console-address", ":9001"],
-  },
+const extraServices: Record<string, any> = {
   "fly-log-shipper": {
     container_name: "fly-log-shipper",
     image: "flyio/log-shipper:latest",
@@ -323,6 +319,22 @@ const extraServices = {
     },
   },
 };
+
+if (process.env.STORAGE_BACKEND === "minio") {
+  extraServices.minio = {
+    container_name: "minio",
+    image: "minio/minio",
+    environment: {
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}",
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}",
+      STORAGE_AWS_ACCESS_KEY_ID: "${STORAGE_AWS_ACCESS_KEY_ID}",
+      STORAGE_AWS_SECRET_ACCESS_KEY: "${STORAGE_AWS_SECRET_ACCESS_KEY}",
+    },
+    ports: ["9001:9001"],
+    volumes: ["./volumes/minio:/minio-data"],
+    command: ["server", "/minio-data", "--console-address", ":9001"],
+  };
+}
 
 function getDockerUserEntrypointAndCmd(image: string) {
   execSync(`docker pull ${image}`, { stdio: "inherit" });
@@ -691,7 +703,8 @@ function makeFly(inputContext: {
       secretsTs,
       dedent`#!/bin/env -S npx tsx
       import { execSync } from "node:child_process";
-      \n`);
+      \n`
+    );
     const expandedSecrets: string[] = [];
     for (const secretName in secrets) {
       let secretValue = secrets[secretName];
@@ -708,7 +721,8 @@ function makeFly(inputContext: {
         input: ${JSON.stringify(expandedSecrets.join("\n"))},
         stdio: ["pipe", "inherit", "inherit"],
       });
-      `);
+      `
+    );
     fs.chmodSync(`${dir}/secrets.ts`, 0o755);
   }
 
@@ -738,7 +752,9 @@ function makeFly(inputContext: {
           execSync("npx tsx secrets.ts", { stdio: "inherit" });
         }
 
-        execSync("fly deploy --no-public-ips --ha=${metadata?.ha ?? false}", { stdio: "inherit" });
+        execSync("fly deploy --no-public-ips --ha=${
+          metadata?.ha ?? false
+        }", { stdio: "inherit" });
         ${(() => {
           if (metadata?.ip === "flycast")
             return dedent`\n
@@ -1052,9 +1068,12 @@ function clone() {
     console.log("Supabase repo already exists. Skipping clone.");
     return;
   }
-  execSync(`git clone ${gitConfig} --filter=blob:none --no-checkout ${baseRepo} supabase`, {
-    stdio: "inherit",
-  });
+  execSync(
+    `git clone ${gitConfig} --filter=blob:none --no-checkout ${baseRepo} supabase`,
+    {
+      stdio: "inherit",
+    }
+  );
   execSync(`git sparse-checkout set --cone docker`, {
     stdio: "inherit",
     cwd: "supabase",
