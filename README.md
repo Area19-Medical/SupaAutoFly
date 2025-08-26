@@ -8,10 +8,11 @@ defined in the `docker-compose.yml` file.
 
 ## Prerequisites
 
-- Node.js and yarn
+- Node.js >= 21
+- yarn
 - Fly.io CLI
 - Docker
-- Git
+- git
 
 ## Setup
 
@@ -178,6 +179,47 @@ guest_path = "/etc/maintenance_mode"
 13. Remove the maintenance mode `[[files]]` section from `fly.toml`
 14. `./deploy.ts` again to restart the app without maintenance mode.
 
+### Storage Backups (S3 → S3)
+
+If you use supabase storage, you should also back up the storage data. As
+supabase storage uses Postgres only for metadata, the above Postgres backup will
+not include storage payload.
+
+For storage backups, SupaAutoFly uses [S3BorgBackup](https://github.com/SupaAutoFly/S3BorgBackup).
+To use it, configure the target S3 storage in the `.env` file and set a
+backup schedule. You can also configure retention and pruning of old backups and
+adjust some borg internals like compression and the encryption mode.
+
+The `storage-backup` app contains to fly "processes":
+- `backup`: This process machine performs a single backup run and then exits. It
+  is scheduled using `fly machine update --schedule` as configured.
+- `maintenance`: This process machine is usually stopped. It can be started
+  manually using `fly machine start` and picking the `maintenance` machine. This
+  machine will start up and be idle such that you can `fly ssh console` into it.
+  There, you can use `backup.py mount target-primary` to mount the borg
+  repository and run the `borg` command to list/inspect/check/mount/restore backups.
+
+  Some examples, see `borg` documentation for more details:
+  ```shell
+  $ borg check -v target-primary
+  $ borg info target-primary
+  $ borg list target-primary
+  $ borg info target-primary::<backup-name>
+  $ borg list target-primary::<backup-name>
+  $ borg export-tar target-primary::<backup-name> - | tar -tvf -
+  $ mkdir restore
+  $ borg mount target-primary::<backup-name> restore
+  $ umount restore
+  $ umount target-primary
+  $ exit
+  ```
+  Don't forget to `fly machine stop` the maintenance machine again to avoid
+  unnecessary costs.
+
+  If `borg` fails due to memory exhaustion, please increase the memory of the
+  VMs in `makeFly.ts` (see comments there).
+
+  _Do try this out before you need it in production!_
 
 ## Customization
 

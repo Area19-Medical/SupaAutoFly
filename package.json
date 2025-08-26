@@ -1,5 +1,5 @@
 {
-  "name": "SupaAutoFly",
+  "name": "supaautofly",
   "version": "1.0.0",
   "description": "Scripts for automatically deploying self-hosted supabase on fly.io based on docker-compose.yml.",
   "main": "index.js",
@@ -7,6 +7,9 @@
   "license": "MIT",
   "scripts": {
     "test": "jest"
+  },
+  "engines": {
+    "node": ">=21.0.0"
   },
   "dependencies": {
     "dependency-solver": "^1.0.6",

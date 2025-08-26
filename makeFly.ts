@@ -43,6 +43,7 @@ type FlyConfig = {
   files: Array<{ guest_path: string; local_path: string }>;
   services: Array<any>;
   vm: Record<string, any>;
+  processes?: Record<string, string>;
   experimental?: {
     entrypoint?: string[];
     cmd?: string[];
@@ -61,6 +62,22 @@ type Context = InputContext & {
   flyConfig: FlyConfig;
 };
 
+type ProcessRunMode = "run" | "hourly" | "daily" | "weekly" | "monthly" | "stop";
+
+function processRunMode(mode: string): ProcessRunMode | undefined {
+  switch (mode) {
+    case "run":
+    case "hourly":
+    case "daily":
+    case "weekly":
+    case "monthly":
+    case "stop":
+      return mode;
+    default:
+      return undefined;
+  }
+}
+
 type ServiceMetadata = {
   image?: string;
   buildFromRepo?: { repo: string; branch: string; dockerfile?: string };
@@ -74,6 +91,10 @@ type ServiceMetadata = {
   extraVolumes?: string[];
   extraDependsOn?: string[];
   skipVolumes?: string[];
+  processes?: Record<string, {
+    cmd: string;
+    mode: ProcessRunMode;
+  }>;
   vm?: any;
   postprocess?: ((context: Context) => void)[];
   preprocess?: ((context: InputContext) => void)[];
@@ -86,9 +107,12 @@ type Metadata = {
 };
 
 function makeMetadata(prefix: string): Metadata {
-  const storageS3Endpoint = storageBackend === "minio"
-            ? `http://${prefix}-minio.internal:9000`
-            : "${STORAGE_S3_ENDPOINT}"
+  const storageS3Endpoint =
+    storageBackend === "minio"
+      ? `http://${prefix}-minio.internal:9000`
+      : "${STORAGE_S3_ENDPOINT}";
+  const storageS3Bucket =
+    storageBackend === "minio" ? `${prefix}-storage` : "${STORAGE_S3_BUCKET}";
   return {
     db: {
       ha: false,
@@ -149,6 +173,14 @@ function makeMetadata(prefix: string): Metadata {
       suppressPorts: ["${KONG_HTTPS_PORT}"],
       env: {
         KONG_DNS_ORDER: "LAST,AAAA,A,CNAME",
+        // this is needed in order to make TUS uploads (e.g. from the studio
+        // storage dashboard) work behind fly proxy because it forwards the
+        // public kong end-point in X-Forwarded-* and not the
+        // http://<prefix>-kong.fly.dev:8000/ which will lead to
+        // unreachable upload end-points
+        // as kong is only reachable via the fly proxy, the headers can be
+        // trusted
+        KONG_TRUSTED_IPS: "0.0.0.0/0,::/0",
       },
       postprocess: [postprocessKongYml],
     },
@@ -200,18 +232,16 @@ function makeMetadata(prefix: string): Metadata {
       env: {
         SERVER_HOST: "fly-local-6pn",
         STORAGE_BACKEND: "s3",
-        STORAGE_S3_BUCKET:
-          storageBackend === "minio"
-            ? `${prefix}-storage`
-            : "${STORAGE_S3_BUCKET}",
+        STORAGE_S3_BUCKET: storageS3Bucket,
         STORAGE_S3_MAX_SOCKETS: 200,
         STORAGE_S3_ENDPOINT: storageS3Endpoint,
         STORAGE_S3_FORCE_PATH_STYLE: true,
         STORAGE_S3_REGION:
-          storageBackend === "minio"
-            ? "auto"
-            : "${STORAGE_S3_REGION}",
+          storageBackend === "minio" ? "auto" : "${STORAGE_S3_REGION}",
         FILE_STORAGE_BACKEND_PATH: undefined,
+        REQUEST_ALLOW_X_FORWARDED_PATH: "true",
+        UPLOAD_FILE_SIZE_LIMIT: "${STORAGE_FILE_SIZE_LIMIT:-52428800}",
+        UPLOAD_FILE_SIZE_LIMIT_STANDARD: "${STORAGE_FILE_SIZE_LIMIT:-52428800}",
       },
       secrets: {
         AWS_ACCESS_KEY_ID: "${STORAGE_AWS_ACCESS_KEY_ID}",
@@ -299,6 +329,57 @@ function makeMetadata(prefix: string): Metadata {
       ha: false,
       rawPorts: ["${POSTGRES_PORT}", "${POOLER_PROXY_PORT_TRANSACTION}"],
     },
+    "storage-backup": {
+      ha: false,
+      vm: {
+        // enable if necessary:
+        // cpus: 2,
+        // memory: "4GB",
+        memory: "2GB",
+      },
+      env: {
+        BACKUP_LABEL: "${STORAGE_BACKUP_LABEL:-storage}",
+        SOURCE_ENDPOINT: storageS3Endpoint,
+        SOURCE_PATH: storageS3Bucket,
+        TARGETS: dedent`{
+          "primary": {
+            "endpoint": "${process.env.STORAGE_BACKUP_S3_ENDPOINT}",
+            "path": "${process.env.STORAGE_BACKUP_S3_BUCKET}:${
+          process.env.STORAGE_BACKUP_S3_PATH || "/"
+        }",
+            "prune": "${process.env.STORAGE_BACKUP_PRUNE}",
+            "compression": "${
+              process.env.STORAGE_BACKUP_COMPRESSION || "auto,zstd,22"
+            }",
+            "encryption": "${
+              process.env.STORAGE_BACKUP_ENCRYPTION || "repokey-blake2"
+            }"
+          }
+        }`,
+      },
+      secrets: {
+        SOURCE_ACCESS_KEY_ID: "${STORAGE_AWS_ACCESS_KEY_ID}",
+        SOURCE_SECRET_ACCESS_KEY: "${STORAGE_AWS_SECRET_ACCESS_KEY}",
+        BORG_PASSPHRASE: "${STORAGE_BACKUP_PASSPHRASE}",
+        TARGET_SECRETS: dedent`{
+          "primary": {
+            "access_key_id": "${process.env.STORAGE_BACKUP_S3_ACCESS_KEY_ID}",
+            "secret_access_key": "${process.env.STORAGE_BACKUP_S3_SECRET_ACCESS_KEY}",
+            "borg_passphrase": "${process.env.STORAGE_BACKUP_PASSPHRASE}"
+          }
+        }`,
+      },
+      processes: {
+        backup: {
+          cmd: "/usr/local/bin/backup.py",
+          mode: processRunMode(process.env.STORAGE_BACKUP_SCHEDULE) || "stop",
+        },
+        maintenance: {
+          cmd: "/bin/ash -c 'while sleep 60; do :; done'",
+          mode: "stop",
+        }
+      }
+    },
   };
 }
 
@@ -315,8 +396,16 @@ const extraServices: Record<string, any> = {
     environment: {
       SUPABASE_PREFIX: "${FLY_PREFIX}",
     },
+    // depends_on: {
+    //   // analytics: { condition: "service_healthy" }
+    // },
+  },
+  "storage-backup": {
+    container_name: "storage-backup",
+    image: "ghcr.io/supaautofly/s3borgbackup:main",
     depends_on: {
-      // analytics: { condition: "service_healthy" }
+      // not really but the dependency solver needs a link to order things
+      db: { condition: "service_healthy" },
     },
   },
 };
@@ -458,7 +547,7 @@ function makeFly(inputContext: {
     return !!key.match(/(pass|secret|key|database_url)/i);
   }
 
-  const guessedSecrets = Object.keys(composeData.environment).filter(
+  const guessedSecrets = Object.keys(composeData.environment || {}).filter(
     (key: string) => guessSecret(key)
   );
 
@@ -727,6 +816,12 @@ function makeFly(inputContext: {
     fs.chmodSync(`${dir}/secrets.ts`, 0o755);
   }
 
+  if (metadata?.processes) {
+    flyConfig.processes = Object.fromEntries(
+      Object.entries(metadata.processes).map(([name, proc]) => [name, proc.cmd])
+    );
+  }
+
   fs.writeFileSync(
     `${dir}/deploy.ts`,
     dedent`
@@ -756,6 +851,39 @@ function makeFly(inputContext: {
         execSync("fly deploy --no-public-ips --ha=${
           metadata?.ha ?? false
         }", { stdio: "inherit" });
+        ${(() => {
+          if (metadata?.processes) {
+            return dedent`
+              const machines = JSON.parse(execSync("fly machines list -j", {
+                stdio: ["inherit", "pipe", "inherit"],
+                encoding: "utf8"
+              }));
+              const processMachines = Object.groupBy(
+                machines,
+                m => m.config.metadata.fly_process_group
+              );
+              ${Object.entries(metadata.processes).map(([procName, proc]) => {
+                if (proc.mode === "run") return "";
+                return dedent`
+                  processMachines["${procName}"]?.forEach(m => {
+                    ${(() => {
+                      if (proc.mode === "stop") {
+                        return dedent`
+                          execSync(\`fly machine stop \${m.id}\`, { stdio: "inherit" });
+                          `;
+                      }
+                      return dedent`
+                        execSync(\`fly machine stop \${m.id}\`, { stdio: "inherit" });
+                        execSync(\`fly machine update \${m.id} --schedule ${proc.mode} --yes\`, { stdio: "inherit" });
+                        execSync(\`fly machine restart \${m.id}\`, { stdio: "inherit" });
+                        `;
+                    })()}
+                  });
+                  `;
+              }).join("\n")}
+              `;
+          }
+        })()}
         ${(() => {
           if (metadata?.ip === "flycast")
             return dedent`\n
@@ -1060,7 +1188,6 @@ function makeDependencyGraph(
       (dependency: string) => substitutedServices[dependency] ?? dependency
     );
   }
-
   return graph;
 }
 
