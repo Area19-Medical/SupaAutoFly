@@ -975,8 +975,12 @@ function generateDockerfile(
             if [ -e ${mount.destination} ]; then
                 rm -rf ${mount.destination}
             fi
-            mkdir -p ${mount.destination}
-            mount --bind /fly-data/${mount.source} ${mount.destination}\n
+            if command -v mount >/dev/null ; then
+              mkdir -p ${mount.destination}
+              mount --bind /fly-data/${mount.source} ${mount.destination}
+            else
+              ln -s /fly-data/${mount.source} ${mount.destination}
+            fi\n
             `
     );
   });
