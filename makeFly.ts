@@ -93,6 +93,7 @@ type ServiceMetadata = {
   skipVolumes?: string[];
   processes?: Record<string, {
     cmd: string;
+    // assumption: processes with a schedule (hourly, ...) perform a task and then quit, deployment will wait for them to terminate by themselves
     mode: ProcessRunMode;
   }>;
   vm?: any;
@@ -832,6 +833,13 @@ function makeFly(inputContext: {
         import { execSync } from "node:child_process";
         import { existsSync } from "node:fs";
 
+        function msleep(n) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, n);
+        }
+        function sleep(n) {
+          msleep(n*1000);
+        }
+
         try {
           execSync("fly status --app ${prefix}-${name}", { stdio: "ignore" });
         } catch (error) {
@@ -875,9 +883,14 @@ function makeFly(inputContext: {
                           execSync(\`fly machine stop \${m.id}\`, { stdio: "inherit" });
                           `;
                       }
+                      // proc.mode with a schedule is expected to terminate by itself
                       return dedent`
+                        while (!execSync(\`fly machine status \${m.id}\`, { stdio: ["inherit", "pipe", "inherit"], encoding: "utf8" }).includes("State: stopped")) {
+                          console.log("Waiting for initial run of \\"${procName}\\" to complete...");
+                          sleep(1);
+                        }
                         execSync(\`fly machine stop \${m.id}\`, { stdio: "inherit" });
-                        execSync(\`fly machine update \${m.id} --schedule ${proc.mode} --yes\`, { stdio: "inherit" });
+                        execSync(\`fly machine update \${m.id} --schedule ${proc.mode} --skip-start --yes\`, { stdio: "inherit" });
                         execSync(\`fly machine restart \${m.id}\`, { stdio: "inherit" });
                         `;
                     })()}
