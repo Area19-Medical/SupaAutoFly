@@ -400,14 +400,6 @@ const extraServices: Record<string, any> = {
     //   // analytics: { condition: "service_healthy" }
     // },
   },
-  "storage-backup": {
-    container_name: "storage-backup",
-    image: "ghcr.io/supaautofly/s3borgbackup:main",
-    depends_on: {
-      // not really but the dependency solver needs a link to order things
-      db: { condition: "service_healthy" },
-    },
-  },
 };
 
 if (storageBackend === "minio") {
@@ -424,6 +416,17 @@ if (storageBackend === "minio") {
     volumes: ["./volumes/minio:/minio-data"],
     command: ["server", "/minio-data", "--console-address", ":9001"],
   };
+}
+
+if (process.env.STORAGE_BACKUP_S3_ENDPOINT) {
+  extraServices["storage-backup"] = {
+    container_name: "storage-backup",
+    image: "ghcr.io/supaautofly/s3borgbackup:main",
+    depends_on: {
+      // not really but the dependency solver needs a link to order things
+      db: { condition: "service_healthy" },
+    },
+  }
 }
 
 function getDockerUserEntrypointAndCmd(image: string) {
