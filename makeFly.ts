@@ -62,7 +62,13 @@ type Context = InputContext & {
   flyConfig: FlyConfig;
 };
 
-type ProcessRunMode = "run" | "hourly" | "daily" | "weekly" | "monthly" | "stop";
+type ProcessRunMode =
+  | "run"
+  | "hourly"
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "stop";
 
 function processRunMode(mode: string): ProcessRunMode | undefined {
   switch (mode) {
@@ -91,11 +97,15 @@ type ServiceMetadata = {
   extraVolumes?: string[];
   extraDependsOn?: string[];
   skipVolumes?: string[];
-  processes?: Record<string, {
-    cmd: string;
-    // assumption: processes with a schedule (hourly, ...) perform a task and then quit, deployment will wait for them to terminate by themselves
-    mode: ProcessRunMode;
-  }>;
+  processes?: Record<
+    string,
+    {
+      cmd: string;
+      // assumption: processes with a schedule (hourly, ...) perform a task and then quit, deployment will wait for them to terminate by themselves
+      mode: ProcessRunMode;
+      needsVolume?: boolean;
+    }
+  >;
   vm?: any;
   postprocess?: ((context: Context) => void)[];
   preprocess?: ((context: InputContext) => void)[];
@@ -374,12 +384,14 @@ function makeMetadata(prefix: string): Metadata {
         backup: {
           cmd: "/usr/local/bin/backup.py",
           mode: processRunMode(process.env.STORAGE_BACKUP_SCHEDULE) || "stop",
+          needsVolume: true,
         },
         maintenance: {
           cmd: "/bin/ash -c 'while sleep 60; do :; done'",
           mode: "stop",
-        }
-      }
+          needsVolume: true,
+        },
+      },
     },
   };
 }
@@ -427,7 +439,11 @@ if (process.env.STORAGE_BACKUP_S3_ENDPOINT) {
       // not really but the dependency solver needs a link to order things
       db: { condition: "service_healthy" },
     },
-  }
+    volumes: [
+      "./volumes/storage-backup-cache:/cache",
+      "./volumes/storage-backup-config:/config",
+    ],
+  };
 }
 
 function getDockerUserEntrypointAndCmd(image: string) {
@@ -770,7 +786,23 @@ function makeFly(inputContext: {
       name,
       metadata
     );
-    flyConfig.mounts = mounts;
+
+    const mountsProcesses = Object.entries(metadata.processes ?? {})
+      .filter(
+        ([_, processMeta], index) =>
+          index === 0 || (processMeta.needsVolume ?? false)
+      )
+      .map(([processName, _]) => processName);
+
+    flyConfig.mounts = mounts.map((mount: any) => ({
+      ...mount,
+      ...(mountsProcesses.length > 0
+        ? {
+            processes: mountsProcesses,
+          }
+        : {}),
+    }));
+
     if (entrypoint) {
       flyConfig.experimental = {
         ...flyConfig.experimental,
@@ -873,9 +905,10 @@ function makeFly(inputContext: {
                 machines,
                 m => m.config.metadata.fly_process_group
               );
-              ${Object.entries(metadata.processes).map(([procName, proc]) => {
-                if (proc.mode === "run") return "";
-                return dedent`
+              ${Object.entries(metadata.processes)
+                .map(([procName, proc]) => {
+                  if (proc.mode === "run") return "";
+                  return dedent`
                   processMachines["${procName}"]?.forEach(m => {
                     ${(() => {
                       if (proc.mode === "stop") {
@@ -896,7 +929,8 @@ function makeFly(inputContext: {
                     })()}
                   });
                   `;
-              }).join("\n")}
+                })
+                .join("\n")}
               `;
           }
         })()}
@@ -961,43 +995,53 @@ function generateDockerfile(
   fs.writeSync(
     fd,
     dedent`
-        FROM ${image}
+      FROM ${image}
 
-        USER root
-        RUN mkdir -p /fly-data
+      USER root
+      RUN mkdir -p /fly-data
 
-        COPY --chmod=755 --chown=${user} <<EOF /usr/local/bin/fly-user-entrypoint.sh
-        #!/bin/sh
-        exec ${singleQuote(imageEntrypoint)} "\\$@"
-        EOF
+      COPY --chmod=755 --chown=${user} <<'EOF' /usr/local/bin/fly-user-entrypoint.sh
+      #!/bin/sh
+      exec ${singleQuote(imageEntrypoint)} "$@"
+      EOF
 
-        COPY --chmod=755 <<EOF /usr/local/bin/fly-entrypoint.sh
-        #!/bin/sh
-        set -e\n
-        `
+      COPY --chmod=755 <<'EOF' /usr/local/bin/fly-entrypoint.sh
+      #!/bin/sh
+      set -e
+
+      setup_mount() {
+        mount_source="$1"
+        mount_destination="$2"
+        mount_destination_dir="$3"
+        if [ ! -e /fly-data/$mount_source ]; then
+          if [ -e $mount_destination ]; then
+            mv $mount_destination /fly-data/$mount_source
+          else
+            mkdir -p /fly-data/$mount_source
+          fi
+        fi
+        mkdir -p $mount_destination_dir
+        if [ -e $mount_destination ]; then
+            rm -rf $mount_destination
+        fi
+        if command -v mount >/dev/null ; then
+          mkdir -p $mount_destination
+          mount --bind /fly-data/$mount_source $mount_destination
+        else
+          ln -s /fly-data/$mount_source $mount_destination
+        fi
+      }
+      \n
+      `
   );
   mounts.forEach((mount: any) => {
     fs.writeSync(
       fd,
       dedent`
-            if [ ! -e /fly-data/${mount.source} ]; then
-              if [ -e ${mount.destination} ]; then
-                mv ${mount.destination} /fly-data/${mount.source}
-              else
-                mkdir -p /fly-data/${mount.source}
-              fi
-            fi
-            mkdir -p ${path.dirname(mount.destination)}
-            if [ -e ${mount.destination} ]; then
-                rm -rf ${mount.destination}
-            fi
-            if command -v mount >/dev/null ; then
-              mkdir -p ${mount.destination}
-              mount --bind /fly-data/${mount.source} ${mount.destination}
-            else
-              ln -s /fly-data/${mount.source} ${mount.destination}
-            fi\n
-            `
+        setup_mount ${mount.source} ${mount.destination} ${path.dirname(
+        mount.destination
+      )}\n
+        `
     );
   });
 
@@ -1007,10 +1051,10 @@ function generateDockerfile(
   if (user !== "root") {
     fs.writeSync(
       fd,
-      `exec su \\$(id -u -n ${user}) /usr/local/bin/fly-user-entrypoint.sh "\\$@"\n`
+      `exec su \\$(id -u -n ${user}) /usr/local/bin/fly-user-entrypoint.sh "$@"\n`
     );
   } else {
-    fs.writeSync(fd, `exec /usr/local/bin/fly-user-entrypoint.sh "\\$@"\n`);
+    fs.writeSync(fd, `exec /usr/local/bin/fly-user-entrypoint.sh "$@"\n`);
   }
   fs.writeSync(
     fd,
